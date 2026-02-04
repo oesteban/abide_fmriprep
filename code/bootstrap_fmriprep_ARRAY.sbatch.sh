@@ -17,20 +17,6 @@ need_cmd() {
   command -v "$1" >/dev/null 2>&1 || die "Missing required command: $1"
 }
 
-site_to_code() {
-  # Example: BNI_1 -> BNI1 ; CMU_a -> CMUA ; NYU -> NYU
-  local site="$1"
-  echo "$site" | tr -cd '[:alnum:]' | tr '[:lower:]' '[:upper:]'
-}
-
-make_new_label() {
-  # label WITHOUT "sub-"
-  local ver="$1"      # v1 or v2
-  local sitecode="$2" # e.g., BNI1
-  local orig="$3"     # original subject label WITHOUT "sub-"
-  echo "${ver}+${sitecode}+${orig}"
-}
-
 with_lock() {
   local lockfile="$1"; shift
   mkdir -p "$(dirname "$lockfile")"
@@ -49,25 +35,34 @@ prefetch_templateflow_all() {
   "
 }
 
-rename_subject_tree() {
-  # Rename all files/dirs that contain 'sub-<orig>' into 'sub-<new>'
-  # Avoid touching .git/.datalad internals.
-  local root="$1"
-  local orig="$2"        # without "sub-"
-  local newlabel="$3"    # without "sub-"
+list_subjects_from_participants() {
+  local participants_tsv="$1"
+  local dataset_filter="$2"
+  local site_filter="$3"
+  awk -F'\t' -v ds="$dataset_filter" -v site="$site_filter" '
+    NR==1 { next }
+    (ds == "" || $2 == ds) && (site == "" || $3 == site) { print $1 }
+  ' "$participants_tsv"
+}
 
-  local from="sub-${orig}"
-  local to="sub-${newlabel}"
+lookup_participant() {
+  local participants_tsv="$1"
+  local participant_id="$2"
+  awk -F'\t' -v pid="$participant_id" '
+    NR==1 { next }
+    $1 == pid { print $2 "\t" $3 "\t" $4 "\t" $5; exit }
+  ' "$participants_tsv"
+}
 
-  find "$root" -depth \
-    \( -path "$root/.git" -o -path "$root/.git/*" -o -path "$root/.datalad" -o -path "$root/.datalad/*" \) -prune -o \
-    -name "*${from}*" -print0 \
-  | while IFS= read -r -d '' p; do
-      local np="${p//${from}/${to}}"
-      [[ "$p" == "$np" ]] && continue
-      mkdir -p "$(dirname "$np")"
-      mv "$p" "$np"
-    done
+resolve_symlink_abs() {
+  local symlink_path="$1"
+  python - "$symlink_path" <<'PY'
+import os, sys
+path = sys.argv[1]
+target = os.readlink(path)
+abs_target = os.path.abspath(os.path.join(os.path.dirname(path), target))
+print(abs_target)
+PY
 }
 
 # -------------------------
@@ -90,25 +85,25 @@ SKIP_BIDS_VALIDATION=1
 
 usage() {
   cat <<EOF
-Usage (array, auto-discover subjects):
+Usage (array, auto-discover subjects from inputs/abide-both):
   sbatch --array=1-N code/bootstrap_fmriprep_ARRAY.sbatch.sh \\
     --project-root /path/to/abide-fmriprep-yoda \\
-    --dataset abide1|abide2 \\
-    --site <SITE>
+    [--dataset abide1|abide2] \\
+    [--site <SITE>]
 
 Usage (array, explicit subjects list):
   sbatch --array=1-N code/bootstrap_fmriprep_ARRAY.sbatch.sh \\
     --project-root /path/to/abide-fmriprep-yoda \\
-    --dataset abide1|abide2 \\
-    --site <SITE> \\
+    [--dataset abide1|abide2] \\
+    [--site <SITE>] \\
     --subjects-file lists/<file>
 
 Usage (single subject):
   sbatch code/bootstrap_fmriprep_ARRAY.sbatch.sh \\
     --project-root /path/to/abide-fmriprep-yoda \\
-    --dataset abide1|abide2 \\
-    --site <SITE> \\
-    --subject <sub-XXXX|XXXX>
+    [--dataset abide1|abide2] \\
+    [--site <SITE>] \\
+    --subject <sub-v1+sX+XXXX|v1+sX+XXXX>
 
 Optional:
   --fs-license-file /path/to/license.txt (defaults to FS_LICENSE or <project-root>/env/secrets/fs_license.txt)
@@ -139,14 +134,20 @@ while [[ $# -gt 0 ]]; do
 done
 
 [[ -n "$PROJECT_ROOT" ]] || die "--project-root is required"
-[[ -n "$DATASET" ]] || die "--dataset is required"
-[[ -n "$SITE" ]] || die "--site is required"
+if [[ -n "$DATASET" ]]; then
+  DATASET="$(echo "$DATASET" | tr '[:upper:]' '[:lower:]')"
+  case "$DATASET" in
+    abide1|abide2) ;;
+    *) die "--dataset must be abide1 or abide2 when provided" ;;
+  esac
+fi
 
 # -------------------------
 # YODA-relative paths inside project-root
 # -------------------------
 ABIDE1_REL="inputs/abide1"
 ABIDE2_REL="inputs/abide2"
+BOTH_REL="inputs/abide-both"
 TF_REL="inputs/templateflow"
 PROC_REL="derivatives/fmriprep-25.2"
 
@@ -166,6 +167,10 @@ git -C "$PROJECT_ROOT" rev-parse --is-inside-work-tree >/dev/null 2>&1 \
 
 [[ -d "$TEMPLATEFLOW_HOME_HOST" ]] || die "TemplateFlow path not found: $TEMPLATEFLOW_HOME_HOST"
 [[ -d "$PROJECT_ROOT/$PROC_REL" ]] || die "Processed subdataset path not found: $PROJECT_ROOT/$PROC_REL"
+[[ -d "$PROJECT_ROOT/$BOTH_REL" ]] || die "Merged input subdataset path missing: $PROJECT_ROOT/$BOTH_REL"
+
+PARTICIPANTS_TSV="$PROJECT_ROOT/$BOTH_REL/participants.tsv"
+[[ -f "$PARTICIPANTS_TSV" ]] || die "participants.tsv not found: $PARTICIPANTS_TSV (run build_abide_both.py)"
 
 # FreeSurfer license: default to FS_LICENSE or env/secrets
 if [[ -z "$FS_LICENSE_FILE" ]]; then
@@ -177,19 +182,6 @@ if [[ -z "$FS_LICENSE_FILE" ]]; then
 fi
 [[ -f "$FS_LICENSE_FILE" ]] || die "FreeSurfer license file not found: $FS_LICENSE_FILE (set --fs-license-file or FS_LICENSE)"
 
-case "$DATASET" in
-  abide1|ABIDE1)
-    RAW_REL="$ABIDE1_REL"
-    VER="v1"
-    ;;
-  abide2|ABIDE2)
-    RAW_REL="$ABIDE2_REL"
-    VER="v2"
-    ;;
-  *) die "Unknown dataset: $DATASET (expected abide1|abide2)" ;;
-esac
-
-[[ -d "$PROJECT_ROOT/$RAW_REL" ]] || die "Raw input subdataset path missing: $PROJECT_ROOT/$RAW_REL"
 
 # Subject from array list if not provided
 if [[ -z "$SUBJECT" ]]; then
@@ -200,15 +192,11 @@ if [[ -z "$SUBJECT" ]]; then
     [[ -n "$SUBJECT" ]] || die "No subject found at line ${SLURM_ARRAY_TASK_ID} in $SUBJECTS_FILE"
   else
     [[ -n "${SLURM_ARRAY_TASK_ID:-}" ]] || die "SLURM_ARRAY_TASK_ID not set (submit as an array?)"
-    SITE_DIR="${PROJECT_ROOT}/${RAW_REL}/${SITE}"
-    [[ -d "$SITE_DIR" ]] || die "Site directory not found: $SITE_DIR"
     mapfile -t SUBJECTS < <(
-      find "$SITE_DIR" -maxdepth 1 -mindepth 1 -type d -name 'sub-*' -printf '%f\n' \
-      | sed 's/^sub-//' \
-      | sort
+      list_subjects_from_participants "$PARTICIPANTS_TSV" "$DATASET" "$SITE" | sort
     )
     NUM_SUBJECTS="${#SUBJECTS[@]}"
-    [[ "$NUM_SUBJECTS" -gt 0 ]] || die "No subjects found under $SITE_DIR"
+    [[ "$NUM_SUBJECTS" -gt 0 ]] || die "No subjects found in participants.tsv for dataset/site filters"
     IDX=$((SLURM_ARRAY_TASK_ID - 1))
     if [[ "$IDX" -lt 0 || "$IDX" -ge "$NUM_SUBJECTS" ]]; then
       die "SLURM_ARRAY_TASK_ID (${SLURM_ARRAY_TASK_ID}) out of range 1..${NUM_SUBJECTS}"
@@ -219,12 +207,21 @@ fi
 
 SUBJECT="${SUBJECT#sub-}"
 
-SITE_CODE="$(site_to_code "$SITE")"
-NEW_LABEL="$(make_new_label "$VER" "$SITE_CODE" "$SUBJECT")"
-NEW_SUBDIR="sub-${NEW_LABEL}"
+PARTICIPANT_ID="sub-${SUBJECT}"
+PARTICIPANT_ROW="$(lookup_participant "$PARTICIPANTS_TSV" "$PARTICIPANT_ID")"
+[[ -n "$PARTICIPANT_ROW" ]] || die "Subject not found in participants.tsv: $PARTICIPANT_ID"
+
+IFS=$'\t' read -r SOURCE_DATASET SOURCE_SITE SITE_INDEX SOURCE_SUBJECT <<<"$PARTICIPANT_ROW"
+case "$SOURCE_DATASET" in
+  abide1) SOURCE_REL="$ABIDE1_REL" ;;
+  abide2) SOURCE_REL="$ABIDE2_REL" ;;
+  *) die "Unknown source dataset in participants.tsv: $SOURCE_DATASET" ;;
+esac
+SOURCE_SUBPATH_REL="${SOURCE_REL}/${SOURCE_SITE}/sub-${SOURCE_SUBJECT}"
 
 echo "[INFO] PROJECT_ROOT=$PROJECT_ROOT"
-echo "[INFO] DATASET=$DATASET  SITE=$SITE (code=$SITE_CODE)  SUBJECT=$SUBJECT  NEW=$NEW_SUBDIR"
+echo "[INFO] FILTER_DATASET=${DATASET:-<none>}  FILTER_SITE=${SITE:-<none>}"
+echo "[INFO] SUBJECT=sub-${SUBJECT}  SOURCE_DATASET=$SOURCE_DATASET  SOURCE_SITE=$SOURCE_SITE  SOURCE_SUBJECT=$SOURCE_SUBJECT  SITE_INDEX=$SITE_INDEX"
 echo "[INFO] TEMPLATEFLOW_HOME_HOST=$TEMPLATEFLOW_HOME_HOST"
 echo "[INFO] CONTAINER_NAME=$CONTAINER_NAME  GIN_REMOTE=$GIN_REMOTE"
 
@@ -253,30 +250,36 @@ cd "$JOB_CLONE"
 # Install (but don't download) the processed subdataset so we can commit into it
 datalad get -n "$PROC_REL"
 
-# Ensure raw input subdataset is installed in the clone (metadata only)
-datalad get -n "$RAW_REL"
+# Ensure merged input and source subdatasets are installed in the clone (metadata only)
+datalad get -n "$BOTH_REL"
+datalad get -n "$SOURCE_REL"
 
-# Get the one subject (recursively, so func/anat are present)
-SUBPATH_REL="${RAW_REL}/${SITE}/sub-${SUBJECT}"
-echo "[INFO] datalad get subject: $SUBPATH_REL"
-datalad get -r "$SUBPATH_REL"
+# Resolve a symlink in the merged view to ensure we fetch data from the source dataset
+BOTH_SUBDIR_REL="${BOTH_REL}/sub-${SUBJECT}"
+BOTH_SUBDIR_ABS="$JOB_CLONE/$BOTH_SUBDIR_REL"
+[[ -d "$BOTH_SUBDIR_ABS" ]] || die "Merged subject directory missing: $BOTH_SUBDIR_ABS"
+FIRST_LINK="$(find "$BOTH_SUBDIR_ABS" -type l | head -n 1)"
+[[ -n "$FIRST_LINK" ]] || die "No symlinks found under merged subject: $BOTH_SUBDIR_ABS"
+TARGET_ABS="$(resolve_symlink_abs "$FIRST_LINK")"
+EXPECTED_PREFIX="$JOB_CLONE/$SOURCE_SUBPATH_REL/"
+if [[ "$TARGET_ABS" != "$EXPECTED_PREFIX"* ]]; then
+  die "Symlink target does not match source dataset. Expected prefix: $EXPECTED_PREFIX ; got: $TARGET_ABS"
+fi
 
-# Decide BIDS root (site folder preferred if it has dataset_description.json)
-BIDS_SITE_DIR="$JOB_CLONE/${RAW_REL}/${SITE}"
-BIDS_ROOT_HOST=""
-if [[ -f "${BIDS_SITE_DIR}/dataset_description.json" ]]; then
-  BIDS_ROOT_HOST="$BIDS_SITE_DIR"
-elif [[ -f "$JOB_CLONE/${RAW_REL}/dataset_description.json" ]]; then
-  BIDS_ROOT_HOST="$JOB_CLONE/${RAW_REL}"
-else
-  # fMRIPrep expects the BIDS root to contain dataset_description.json :contentReference[oaicite:2]{index=2}
-  die "No dataset_description.json found at site-level or dataset-level. Cannot determine BIDS root for fMRIPrep."
+# Get the one subject (recursively, so func/anat are present) in the source dataset
+echo "[INFO] datalad get source subject: $SOURCE_SUBPATH_REL"
+datalad get -r "$SOURCE_SUBPATH_REL"
+
+# BIDS root is the merged dataset
+BIDS_ROOT_HOST="$JOB_CLONE/$BOTH_REL"
+if [[ ! -f "$BIDS_ROOT_HOST/dataset_description.json" ]]; then
+  die "No dataset_description.json found in merged BIDS root: $BIDS_ROOT_HOST"
 fi
 echo "[INFO] BIDS_ROOT_HOST=$BIDS_ROOT_HOST"
 
 # Prepare processed dataset branch (branch-per-job)
 OUT_DIR_HOST="$JOB_CLONE/$PROC_REL"
-JOB_BRANCH="job/${DATASET}/${SITE_CODE}/${SUBJECT}/${SLURM_JOB_ID:-$$}_${SLURM_ARRAY_TASK_ID:-0}"
+JOB_BRANCH="job/abide-both/${SOURCE_DATASET}/${SOURCE_SITE}/sub-${SUBJECT}/${SLURM_JOB_ID:-$$}_${SLURM_ARRAY_TASK_ID:-0}"
 echo "[INFO] Checking out processed job branch: $JOB_BRANCH"
 git -C "$OUT_DIR_HOST" checkout -b "$JOB_BRANCH"
 
@@ -302,8 +305,9 @@ fi
 echo "[INFO] Running fMRIPrep via datalad containers-run"
 datalad containers-run -n "$CONTAINER_NAME" \
   --explicit \
-  -m "fMRIPrep ${DATASET} ${SITE} sub-${SUBJECT}" \
-  --input "$SUBPATH_REL" \
+  -m "fMRIPrep abide-both ${SOURCE_DATASET} ${SOURCE_SITE} sub-${SUBJECT}" \
+  --input "$BOTH_SUBDIR_REL" \
+  --input "$SOURCE_SUBPATH_REL" \
   --output "$PROC_REL" \
   -- \
   /bids /out participant \
@@ -318,13 +322,6 @@ datalad containers-run -n "$CONTAINER_NAME" \
     --mem-mb "$MEM_MB" \
     -w /work
 
-# Rename outputs to unified subject ID (sub-v1+... or sub-v2+...)
-echo "[INFO] Renaming outputs inside processed dataset: sub-${SUBJECT} -> ${NEW_SUBDIR}"
-rename_subject_tree "$OUT_DIR_HOST" "$SUBJECT" "$NEW_LABEL"
-
-# Save rename as commit in processed dataset
-datalad -d "$OUT_DIR_HOST" save -m "Rename sub-${SUBJECT} -> ${NEW_SUBDIR} (${DATASET}/${SITE})"
-
 # Push processed dataset branch to GIN (data + git)
 echo "[INFO] Pushing processed dataset to '$GIN_REMOTE' (branch: $JOB_BRANCH)"
 datalad -d "$OUT_DIR_HOST" push --to "$GIN_REMOTE" --data anything
@@ -335,6 +332,6 @@ datalad -d "$OUT_DIR_HOST" drop -r .
 
 # Drop raw subject in the job clone (step 4)
 echo "[INFO] Dropping raw subject content from job clone"
-datalad -d "$JOB_CLONE" drop -r "$SUBPATH_REL" || true
+datalad -d "$JOB_CLONE" drop -r "$SOURCE_SUBPATH_REL" || true
 
 echo "[INFO] DONE. Job scratch: $JOB_SCRATCH"

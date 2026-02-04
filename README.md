@@ -13,6 +13,7 @@ dataset layout and DataLad for provenance and reproducibility.
 ## Inputs and data sources
 - `inputs/abide1` (ABIDE I RawDataBIDS)
 - `inputs/abide2` (ABIDE II RawData)
+- `inputs/abide-both` (merged BIDS view via relative symlinks)
 - `inputs/templateflow` (TemplateFlow subdatasets)
 
 ## Prerequisites (portable)
@@ -33,9 +34,22 @@ cd abide_fmriprep
 2. Install subdatasets without downloading data.
 
 ```bash
-datalad get -n inputs/abide1 inputs/abide2 inputs/templateflow
+datalad get -n inputs/abide1 inputs/abide2 inputs/abide-both inputs/templateflow
 datalad get -n derivatives/fmriprep-25.2
 ```
+
+## Build the merged input (`inputs/abide-both`)
+`inputs/abide-both` provides a unified BIDS view across ABIDE I and II using
+relative symlinks. Build or refresh it with:
+
+```bash
+micromamba run -n datalad python code/build_abide_both.py --project-root .
+```
+
+This creates:
+- `inputs/abide-both/participants.tsv`
+- `inputs/abide-both/dataset_description.json`
+- `inputs/abide-both/sub-...` (symlinked subject trees)
 
 ## Container setup (DataLad containers)
 This dataset uses `datalad containers-run` so that all runs are captured with
@@ -71,14 +85,15 @@ cp /path/to/license.txt env/secrets/fs_license.txt
 ```
 
 ## Local one-subject test (macOS, Docker)
-Example for ABIDE I (NYU) and ABIDE II (NYU_1). These subject IDs exist in the
-current inputs.
+Examples for ABIDE I (CMU_a) and ABIDE II (BNI_1). These subject IDs exist in
+the current inputs. Note that `inputs/abide-both` is a symlink view, so the
+source subject must be fetched in the original dataset.
 
 ```bash
 # ABIDE I example
-datalad get -r inputs/abide1/NYU/sub-0050958
+datalad get -r inputs/abide1/CMU_a/sub-0050642
 
-export BIDS_DIR_HOST="$PWD/inputs/abide1/NYU"
+export BIDS_DIR_HOST="$PWD/inputs/abide-both"
 export OUT_DIR_HOST="$PWD/derivatives/fmriprep-25.2"
 export TEMPLATEFLOW_HOME_HOST="$PWD/inputs/templateflow"
 export FMRIPREP_WORKDIR="$PWD/.tmp/fmriprep-work"
@@ -88,12 +103,13 @@ mkdir -p "$FMRIPREP_WORKDIR"
 
 datalad containers-run -n fmriprep-docker \
   --explicit \
-  -m "fMRIPrep ABIDE1 NYU sub-0050958 (local test)" \
-  --input inputs/abide1/NYU/sub-0050958 \
+  -m "fMRIPrep abide-both ABIDE1 CMU_a sub-v1+s1+0050642 (local test)" \
+  --input inputs/abide-both/sub-v1+s1+0050642 \
+  --input inputs/abide1/CMU_a/sub-0050642 \
   --output derivatives/fmriprep-25.2 \
   -- \
   /bids /out participant \
-    --participant-label 0050958 \
+    --participant-label v1+s1+0050642 \
     --skip-bids-validation \
     --output-layout bids \
     --fs-license-file /fs/license.txt \
@@ -107,8 +123,8 @@ datalad containers-run -n fmriprep-docker \
 
 ```bash
 # ABIDE II example
-datalad get -r inputs/abide2/NYU_1/sub-29196
-export BIDS_DIR_HOST="$PWD/inputs/abide2/NYU_1"
+datalad get -r inputs/abide2/BNI_1/sub-29006
+export BIDS_DIR_HOST="$PWD/inputs/abide-both"
 export OUT_DIR_HOST="$PWD/derivatives/fmriprep-25.2"
 export TEMPLATEFLOW_HOME_HOST="$PWD/inputs/templateflow"
 export FMRIPREP_WORKDIR="$PWD/.tmp/fmriprep-work"
@@ -117,7 +133,8 @@ mkdir -p "$FMRIPREP_WORKDIR"
 ```
 
 Then reuse the same `datalad containers-run` command, swapping the subject
-label to `29196` and input path to `inputs/abide2/NYU_1/sub-29196`.
+label to `v2+s0+29006` and the input paths to
+`inputs/abide-both/sub-v2+s0+29006` and `inputs/abide2/BNI_1/sub-29006`.
 
 ## HPC / SLURM usage (HES-SO)
 Module load commands and partitions are TBD. A micromamba environment is the
@@ -136,13 +153,21 @@ micromamba run -n datalad datalad containers-add fmriprep-apptainer --update \
   --call-fmt 'apptainer run --cleanenv -B "$BIDS_DIR_HOST":/bids:ro -B "$OUT_DIR_HOST":/out -B "$FMRIPREP_WORKDIR":/work -B "$TEMPLATEFLOW_HOME_HOST":/templateflow -B "$FS_LICENSE_FILE":/fs/license.txt --env TEMPLATEFLOW_HOME=/templateflow --env TEMPLATEFLOW_USE_DATALAD=on {img} {cmd}'
 ```
 
-Auto-discover subjects per site (no subjects file required):
+Auto-discover subjects from `inputs/abide-both` (filters are optional):
 
 ```bash
 sbatch --array=1-N code/bootstrap_fmriprep_ARRAY.sbatch.sh \
   --project-root /path/to/abide_fmriprep \
   --dataset abide1 \
-  --site NYU \
+  --site CMU_a \
+  --container-name fmriprep-apptainer
+```
+
+Unfiltered run across all subjects (no dataset/site filters):
+
+```bash
+sbatch --array=1-N code/bootstrap_fmriprep_ARRAY.sbatch.sh \
+  --project-root /path/to/abide_fmriprep \
   --container-name fmriprep-apptainer
 ```
 
@@ -152,20 +177,23 @@ Explicit subjects list:
 sbatch --array=1-N code/bootstrap_fmriprep_ARRAY.sbatch.sh \
   --project-root /path/to/abide_fmriprep \
   --dataset abide2 \
-  --site NYU_1 \
+  --site BNI_1 \
   --subjects-file /path/to/subjects.txt \
   --container-name fmriprep-apptainer
 ```
 
 Scratch behavior uses `$SLURM_TMPDIR` when available, otherwise `/tmp`.
+The SLURM script resolves symlinks in `inputs/abide-both` and fetches data
+from the original `inputs/abide1`/`inputs/abide2` datasets.
 
 ## Output naming scheme
-Each subject is renamed in derivatives to unify ABIDE I/II IDs:
-- ABIDE I: `sub-v1+SITE+orig`
-- ABIDE II: `sub-v2+SITE+orig`
+Subjects are normalized in `inputs/abide-both` as:
+- ABIDE I: `sub-v1+s<siteindex>+<orig>`
+- ABIDE II: `sub-v2+s<siteindex>+<orig>`
 
-`SITE` is normalized by removing non-alphanumerics and uppercasing
-(`site_to_code` in `code/bootstrap_fmriprep_ARRAY.sbatch.sh`).
+The `siteindex` is the zero-based alphabetical index of the site within each
+dataset (see `inputs/abide-both/participants.tsv`). Outputs keep these IDs
+directly (no post-run rename).
 
 ## Derivatives and provenance
 - Canonical output dataset: `derivatives/fmriprep-25.2`
