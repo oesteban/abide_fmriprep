@@ -2,8 +2,9 @@
 import argparse
 import json
 import os
+import shutil
 from pathlib import Path
-from typing import Dict, Iterable, List, Tuple
+from typing import Iterable, List, Tuple
 
 
 def list_sites(dataset_dir: Path) -> List[str]:
@@ -105,7 +106,10 @@ def build_abide(
         subjects = list_subjects(site_dir)
         for subject_dir in subjects:
             orig_id = subject_dir.name[len("sub-"):]
-            new_id = f"{version_tag}+s{site_index[site]}+{orig_id}"
+            # NOTE: BIDS participant labels must be strictly alphanumeric.
+            # We encode provenance info (ABIDE version + site index + original ID)
+            # using only letters/digits: v1s0x0050642, v2s3x29006, ...
+            new_id = f"{version_tag}s{site_index[site]}x{orig_id}"
 
             participants.append(
                 (f"sub-{new_id}", dataset_name, site, site_index[site], orig_id)
@@ -123,6 +127,26 @@ def build_abide(
                 total_links += 1
 
     return total_links
+
+
+def clean_subject_tree(out_dir: Path, dry_run: bool) -> None:
+    """Remove all existing BIDS subject directories (sub-*) in the merged view.
+
+    This keeps the build idempotent and avoids stale subject IDs if the
+    encoding scheme changes.
+    """
+    if not out_dir.exists():
+        return
+
+    for entry in out_dir.iterdir():
+        if not entry.name.startswith("sub-"):
+            continue
+        if dry_run:
+            continue
+        if entry.is_symlink() or entry.is_file():
+            entry.unlink()
+        elif entry.is_dir():
+            shutil.rmtree(entry)
 
 
 def write_participants_tsv(
@@ -192,6 +216,8 @@ def main() -> None:
 
     participants: List[Tuple[str, str, str, int, str]] = []
     total_links = 0
+
+    clean_subject_tree(out_dir, args.dry_run)
 
     if "abide1" in datasets:
         total_links += build_abide(

@@ -103,7 +103,7 @@ Usage (single subject):
     --project-root /path/to/abide-fmriprep-yoda \\
     [--dataset abide1|abide2] \\
     [--site <SITE>] \\
-    --subject <sub-v1+sX+XXXX|v1+sX+XXXX>
+    --subject <sub-v1sXxXXXX|v1sXxXXXX>
 
 Optional:
   --fs-license-file /path/to/license.txt (defaults to FS_LICENSE or <project-root>/env/secrets/fs_license.txt)

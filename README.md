@@ -124,13 +124,13 @@ mkdir -p "$FMRIPREP_WORKDIR"
 
 micromamba run -n datalad datalad containers-run -n fmriprep-docker \
   --explicit \
-  -m "fMRIPrep abide-both ABIDE1 CMU_a sub-v1+s0+0050642 (local test)" \
-  --input inputs/abide-both/sub-v1+s0+0050642 \
+  -m "fMRIPrep abide-both ABIDE1 CMU_a sub-v1s0x0050642 (local test)" \
+  --input inputs/abide-both/sub-v1s0x0050642 \
   --input inputs/abide1/CMU_a/sub-0050642 \
   --output derivatives/fmriprep-25.2 \
   -- \
   /bids/abide-both /out participant \
-    --participant-label v1+s0+0050642 \
+    --participant-label v1s0x0050642 \
     --skip-bids-validation \
     --output-layout bids \
     --fs-license-file /fs/license.txt \
@@ -154,8 +154,8 @@ mkdir -p "$FMRIPREP_WORKDIR"
 ```
 
 Then reuse the same `datalad containers-run` command, swapping the subject
-label to `v2+s0+29006` and the input paths to
-`inputs/abide-both/sub-v2+s0+29006` and `inputs/abide2/BNI_1/sub-29006`.
+label to `v2s0x29006` and the input paths to
+`inputs/abide-both/sub-v2s0x29006` and `inputs/abide2/BNI_1/sub-29006`.
 
 ## HPC / SLURM usage (HES-SO)
 Module load commands and partitions are TBD. A micromamba environment is the
@@ -210,8 +210,8 @@ from the original `inputs/abide1`/`inputs/abide2` datasets.
 
 ## Output naming scheme
 Subjects are normalized in `inputs/abide-both` as:
-- ABIDE I: `sub-v1+s<siteindex>+<orig>`
-- ABIDE II: `sub-v2+s<siteindex>+<orig>`
+- ABIDE I: `sub-v1s<siteindex>x<orig>`
+- ABIDE II: `sub-v2s<siteindex>x<orig>`
 
 The `siteindex` is the zero-based alphabetical index of the site within each
 dataset (see `inputs/abide-both/participants.tsv`). Outputs keep these IDs
