@@ -10,3 +10,7 @@
 	path = derivatives/fmriprep-25.2
 	url = ./derivatives/fmriprep-25.2
 	datalad-id = 7fcfb3bb-6b2e-4720-9641-7fc51dc6ed54
+[submodule "inputs/templateflow"]
+	path = inputs/templateflow
+	url = https://github.com/templateflow/templateflow.git
+	datalad-id = c79c47b6-d0fb-11e8-aa11-64006a8a730f
