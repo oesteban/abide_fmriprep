@@ -54,7 +54,7 @@ force_in_git = [
     '*.dat',
     '*.done',
     '*.label',
-    '*.local-copy",'
+    '*.local-copy',
     '*.log.bak',
     '*.log',
     '*.lta',
@@ -102,5 +102,4 @@ ds.save(
     message="Apply default BIDS dataset setup",
     to_git=True,
 )
-
 
