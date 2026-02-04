@@ -2,10 +2,9 @@
 	id = 2ac36451-b595-4d75-8ff0-6d6bf3aa9d6d
 [datalad "containers"]
 	enabled = true
-[datalad "containers.fmriprep-docker"]
-	image = dhub:/nipreps/fmriprep:25.2.4
-	call-fmt = docker run --rm -t -v \"$BIDS_DIR_HOST\":/bids:ro -v \"$OUT_DIR_HOST\":/out -v \"$FMRIPREP_WORKDIR\":/work -v \"$TEMPLATEFLOW_HOME_HOST\":/templateflow -v \"$FS_LICENSE_FILE\":/fs/license.txt -e TEMPLATEFLOW_HOME=/templateflow -e TEMPLATEFLOW_USE_DATALAD=on {img} {cmd}
-	cmdexec = docker run --rm -t -v \"$BIDS_DIR_HOST\":/bids:ro -v \"$OUT_DIR_HOST\":/out -v \"$FMRIPREP_WORKDIR\":/work -v \"$TEMPLATEFLOW_HOME_HOST\":/templateflow -v \"$FS_LICENSE_FILE\":/fs/license.txt -e TEMPLATEFLOW_HOME=/templateflow -e TEMPLATEFLOW_USE_DATALAD=on {img} {cmd}
 [datalad "containers.fmriprep-apptainer"]
 	image = docker://nipreps/fmriprep:25.2.4
 	call-fmt = apptainer run --cleanenv -B \"$BIDS_DIR_HOST\":/bids:ro -B \"$OUT_DIR_HOST\":/out -B \"$FMRIPREP_WORKDIR\":/work -B \"$TEMPLATEFLOW_HOME_HOST\":/templateflow -B \"$FS_LICENSE_FILE\":/fs/license.txt --env TEMPLATEFLOW_HOME=/templateflow --env TEMPLATEFLOW_USE_DATALAD=on {img} {cmd}
+[datalad "containers.fmriprep-docker"]
+	image = .datalad/environments/fmriprep-docker/image
+	cmdexec = docker run --rm -t -v \"$BIDS_DIR_HOST\":/bids:ro -v \"$OUT_DIR_HOST\":/out -v \"$FMRIPREP_WORKDIR\":/work -v \"$TEMPLATEFLOW_HOME_HOST\":/templateflow -v \"$FS_LICENSE_FILE\":/fs/license.txt -e TEMPLATEFLOW_HOME=/templateflow -e TEMPLATEFLOW_USE_DATALAD=on {img} {cmd}
