@@ -190,6 +190,11 @@ def parse_args() -> argparse.Namespace:
         help="Project root containing inputs/ and code/ (default: cwd).",
     )
     parser.add_argument(
+        "--clean",
+        action="store_true",
+        help="Delete existing sub-* trees in inputs/abide-both before rebuilding (DANGEROUS).",
+    )
+    parser.add_argument(
         "--link-type",
         choices=["relative", "absolute"],
         default="relative",
@@ -217,7 +222,8 @@ def main() -> None:
     participants: List[Tuple[str, str, str, int, str]] = []
     total_links = 0
 
-    clean_subject_tree(out_dir, args.dry_run)
+    if args.clean:
+        clean_subject_tree(out_dir, args.dry_run)
 
     if "abide1" in datasets:
         total_links += build_abide(

@@ -55,6 +55,34 @@ This creates:
 - `inputs/abide-both/dataset_description.json`
 - `inputs/abide-both/sub-...` (symlinked subject trees)
 
+If you need to rebuild from scratch (e.g., after changing the ID scheme), use
+`--clean` **with caution** (it deletes `inputs/abide-both/sub-*`):
+
+```bash
+micromamba run -n datalad python code/build_abide_both.py --project-root . --clean
+```
+
+## ABIDE I BOLD JSON sidecars (RepetitionTime)
+ABIDE I does not ship functional JSON sidecars, but fMRIPrep/BIDS tooling
+requires (at minimum) `RepetitionTime`. The TR is stored in the NIfTI header,
+so we generate JSON sidecars **in `inputs/abide-both`** (we never modify
+`inputs/abide1`).
+
+Generate sidecars for one participant:
+
+```bash
+python3 code/add_abide1_bold_json.py --project-root . --participant-id sub-v1s0x0050642
+micromamba run -n datalad datalad save -d inputs/abide-both -m "Add ABIDE I BOLD sidecars (TR) for sub-v1s0x0050642"
+```
+
+Or for all ABIDE I participants that are available locally (files not present
+will be skipped):
+
+```bash
+python3 code/add_abide1_bold_json.py --project-root .
+micromamba run -n datalad datalad save -d inputs/abide-both -m "Add ABIDE I BOLD sidecars (TR)"
+```
+
 ## Container setup (DataLad containers)
 This dataset uses `datalad containers-run` so that all runs are captured with
 provenance. Two containers are registered in `.datalad/config`:
@@ -118,6 +146,9 @@ and you'll end up with an empty `/bids` inside the container).
 ```bash
 # ABIDE I example
 micromamba run -n datalad datalad get -r inputs/abide1/CMU_a/sub-0050642
+
+# ABIDE I needs JSON sidecars for RepetitionTime (written into inputs/abide-both/)
+python3 code/add_abide1_bold_json.py --project-root . --participant-id sub-v1s0x0050642
 
 export INPUTS_DIR_HOST="$PWD/inputs"
 export OUT_DIR_HOST="$PWD/derivatives/fmriprep-25.2"
