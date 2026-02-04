@@ -81,7 +81,7 @@ SUBJECTS_FILE=""
 
 FS_LICENSE_FILE=""
 TEMPLATEFLOW_HOME_HOST=""
-CONTAINER_NAME="fmriprep"
+CONTAINER_NAME="fmriprep-docker"
 GIN_REMOTE="gin"
 
 CIFTI_DENSITY="91k"
@@ -90,7 +90,13 @@ SKIP_BIDS_VALIDATION=1
 
 usage() {
   cat <<EOF
-Usage (array):
+Usage (array, auto-discover subjects):
+  sbatch --array=1-N code/bootstrap_fmriprep_ARRAY.sbatch.sh \\
+    --project-root /path/to/abide-fmriprep-yoda \\
+    --dataset abide1|abide2 \\
+    --site <SITE>
+
+Usage (array, explicit subjects list):
   sbatch --array=1-N code/bootstrap_fmriprep_ARRAY.sbatch.sh \\
     --project-root /path/to/abide-fmriprep-yoda \\
     --dataset abide1|abide2 \\
@@ -105,9 +111,9 @@ Usage (single subject):
     --subject <sub-XXXX|XXXX>
 
 Optional:
-  --fs-license-file /path/to/license.txt
+  --fs-license-file /path/to/license.txt (defaults to FS_LICENSE or <project-root>/env/secrets/fs_license.txt)
   --templateflow-home-host /path/to/templateflow (defaults to <project-root>/inputs/templateflow)
-  --container-name <name>  (default: fmriprep)
+  --container-name <name>  (default: fmriprep-docker; e.g., fmriprep-apptainer)
   --gin-remote <name>      (default: gin)
   --cifti-density 91k|170k (default: 91k)
   --skip-bids-validation 0|1 (default: 1)
@@ -136,24 +142,13 @@ done
 [[ -n "$DATASET" ]] || die "--dataset is required"
 [[ -n "$SITE" ]] || die "--site is required"
 
-# Subject from array list if not provided
-if [[ -z "$SUBJECT" ]]; then
-  [[ -n "$SUBJECTS_FILE" ]] || die "Either --subject or --subjects-file is required"
-  [[ -n "${SLURM_ARRAY_TASK_ID:-}" ]] || die "SLURM_ARRAY_TASK_ID not set (submit as an array?)"
-  [[ -f "$SUBJECTS_FILE" ]] || die "Subjects file not found: $SUBJECTS_FILE"
-  SUBJECT="$(sed -n "${SLURM_ARRAY_TASK_ID}p" "$SUBJECTS_FILE" | tr -d '\r' | xargs)"
-  [[ -n "$SUBJECT" ]] || die "No subject found at line ${SLURM_ARRAY_TASK_ID} in $SUBJECTS_FILE"
-fi
-
-SUBJECT="${SUBJECT#sub-}"
-
 # -------------------------
 # YODA-relative paths inside project-root
 # -------------------------
-ABIDE1_REL="inputs/abide1_RawDataBIDS"
-ABIDE2_REL="inputs/abide2_RawData"
+ABIDE1_REL="inputs/abide1"
+ABIDE2_REL="inputs/abide2"
 TF_REL="inputs/templateflow"
-PROC_REL="derivatives/abide_fmriprep"
+PROC_REL="derivatives/fmriprep-25.2"
 
 # -------------------------
 # Sanity checks (fail early if project isn't set up)
@@ -161,7 +156,6 @@ PROC_REL="derivatives/abide_fmriprep"
 need_cmd datalad
 need_cmd git
 need_cmd flock
-need_cmd docker
 
 [[ -d "$PROJECT_ROOT" ]] || die "Project root not found: $PROJECT_ROOT"
 git -C "$PROJECT_ROOT" rev-parse --is-inside-work-tree >/dev/null 2>&1 \
@@ -173,11 +167,15 @@ git -C "$PROJECT_ROOT" rev-parse --is-inside-work-tree >/dev/null 2>&1 \
 [[ -d "$TEMPLATEFLOW_HOME_HOST" ]] || die "TemplateFlow path not found: $TEMPLATEFLOW_HOME_HOST"
 [[ -d "$PROJECT_ROOT/$PROC_REL" ]] || die "Processed subdataset path not found: $PROJECT_ROOT/$PROC_REL"
 
-# FreeSurfer license: require explicit if not provided via env
+# FreeSurfer license: default to FS_LICENSE or env/secrets
 if [[ -z "$FS_LICENSE_FILE" ]]; then
-  die "Provide --fs-license-file (FreeSurfer license must be readable on compute nodes)."
+  if [[ -n "${FS_LICENSE:-}" ]]; then
+    FS_LICENSE_FILE="$FS_LICENSE"
+  else
+    FS_LICENSE_FILE="$PROJECT_ROOT/env/secrets/fs_license.txt"
+  fi
 fi
-[[ -f "$FS_LICENSE_FILE" ]] || die "FreeSurfer license file not found: $FS_LICENSE_FILE"
+[[ -f "$FS_LICENSE_FILE" ]] || die "FreeSurfer license file not found: $FS_LICENSE_FILE (set --fs-license-file or FS_LICENSE)"
 
 case "$DATASET" in
   abide1|ABIDE1)
@@ -192,6 +190,34 @@ case "$DATASET" in
 esac
 
 [[ -d "$PROJECT_ROOT/$RAW_REL" ]] || die "Raw input subdataset path missing: $PROJECT_ROOT/$RAW_REL"
+
+# Subject from array list if not provided
+if [[ -z "$SUBJECT" ]]; then
+  if [[ -n "$SUBJECTS_FILE" ]]; then
+    [[ -n "${SLURM_ARRAY_TASK_ID:-}" ]] || die "SLURM_ARRAY_TASK_ID not set (submit as an array?)"
+    [[ -f "$SUBJECTS_FILE" ]] || die "Subjects file not found: $SUBJECTS_FILE"
+    SUBJECT="$(sed -n "${SLURM_ARRAY_TASK_ID}p" "$SUBJECTS_FILE" | tr -d '\r' | xargs)"
+    [[ -n "$SUBJECT" ]] || die "No subject found at line ${SLURM_ARRAY_TASK_ID} in $SUBJECTS_FILE"
+  else
+    [[ -n "${SLURM_ARRAY_TASK_ID:-}" ]] || die "SLURM_ARRAY_TASK_ID not set (submit as an array?)"
+    SITE_DIR="${PROJECT_ROOT}/${RAW_REL}/${SITE}"
+    [[ -d "$SITE_DIR" ]] || die "Site directory not found: $SITE_DIR"
+    mapfile -t SUBJECTS < <(
+      find "$SITE_DIR" -maxdepth 1 -mindepth 1 -type d -name 'sub-*' -printf '%f\n' \
+      | sed 's/^sub-//' \
+      | sort
+    )
+    NUM_SUBJECTS="${#SUBJECTS[@]}"
+    [[ "$NUM_SUBJECTS" -gt 0 ]] || die "No subjects found under $SITE_DIR"
+    IDX=$((SLURM_ARRAY_TASK_ID - 1))
+    if [[ "$IDX" -lt 0 || "$IDX" -ge "$NUM_SUBJECTS" ]]; then
+      die "SLURM_ARRAY_TASK_ID (${SLURM_ARRAY_TASK_ID}) out of range 1..${NUM_SUBJECTS}"
+    fi
+    SUBJECT="${SUBJECTS[$IDX]}"
+  fi
+fi
+
+SUBJECT="${SUBJECT#sub-}"
 
 SITE_CODE="$(site_to_code "$SITE")"
 NEW_LABEL="$(make_new_label "$VER" "$SITE_CODE" "$SUBJECT")"
