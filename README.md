@@ -123,6 +123,19 @@ label to `29196` and input path to `inputs/abide2/NYU_1/sub-29196`.
 Module load commands and partitions are TBD. A micromamba environment is the
 recommended default on HES-SO until a shared module is provided.
 
+If Apptainer is available on HES-SO, run the container registration there to
+avoid local Singularity build issues:
+
+```bash
+micromamba run -n datalad datalad containers-add fmriprep-docker --update \
+  --url docker://nipreps/fmriprep:25.2.0 \
+  --call-fmt 'docker run --rm -t -v "$BIDS_DIR_HOST":/bids:ro -v "$OUT_DIR_HOST":/out -v "$FMRIPREP_WORKDIR":/work -v "$TEMPLATEFLOW_HOME_HOST":/templateflow -v "$FS_LICENSE_FILE":/fs/license.txt -e TEMPLATEFLOW_HOME=/templateflow -e TEMPLATEFLOW_USE_DATALAD=on {img} {cmd}'
+
+micromamba run -n datalad datalad containers-add fmriprep-apptainer --update \
+  --url docker://nipreps/fmriprep:25.2.0 \
+  --call-fmt 'apptainer run --cleanenv -B "$BIDS_DIR_HOST":/bids:ro -B "$OUT_DIR_HOST":/out -B "$FMRIPREP_WORKDIR":/work -B "$TEMPLATEFLOW_HOME_HOST":/templateflow -B "$FS_LICENSE_FILE":/fs/license.txt --env TEMPLATEFLOW_HOME=/templateflow --env TEMPLATEFLOW_USE_DATALAD=on {img} {cmd}'
+```
+
 Auto-discover subjects per site (no subjects file required):
 
 ```bash
