@@ -87,6 +87,11 @@ Inside the container, the definitions set:
 - `TEMPLATEFLOW_HOME=/templateflow`
 - `TEMPLATEFLOW_USE_DATALAD=on`
 
+Important: `/templateflow` must be mounted **writable**. Even when all template
+files are already present, TemplateFlow's DataLad-based access can touch the
+dataset's `.git/config` (e.g., git-annex remote settings), which will fail on a
+read-only mount.
+
 Create the secrets directory and license file (not tracked by Git):
 
 ```bash
