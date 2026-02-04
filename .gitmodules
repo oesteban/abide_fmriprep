@@ -1,0 +1,8 @@
+[submodule "inputs/abide1"]
+	path = inputs/abide1
+	url = https://datasets.datalad.org/abide/RawDataBIDS/.git
+	datalad-id = 31472594-db5e-11e7-96bc-002590f97d84
+[submodule "inputs/abide2"]
+	path = inputs/abide2
+	url = https://datasets.datalad.org/abide2/RawData/.git
+	datalad-id = b1119aa8-db5d-11e7-bd5c-002590f97d84
