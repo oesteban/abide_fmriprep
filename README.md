@@ -23,19 +23,23 @@ dataset layout and DataLad for provenance and reproducibility.
 - Container runtime: Docker and Apptainer/Singularity
 - Optional: micromamba environment for local installs
 
+All DataLad commands below assume `datalad` is on your `PATH`. If it isn't,
+either `micromamba activate datalad` first, or prefix commands with
+`micromamba run -n datalad`.
+
 ## Clone and bootstrap
 1. Clone with DataLad.
 
 ```bash
-datalad clone <REPO_URL> abide_fmriprep
+micromamba run -n datalad datalad clone <REPO_URL> abide_fmriprep
 cd abide_fmriprep
 ```
 
 2. Install subdatasets without downloading data.
 
 ```bash
-datalad get -n inputs/abide1 inputs/abide2 inputs/abide-both inputs/templateflow
-datalad get -n derivatives/fmriprep-25.2
+micromamba run -n datalad datalad get -n inputs/abide1 inputs/abide2 inputs/abide-both inputs/templateflow
+micromamba run -n datalad datalad get -n derivatives/fmriprep-25.2
 ```
 
 ## Build the merged input (`inputs/abide-both`)
@@ -53,29 +57,35 @@ This creates:
 
 ## Container setup (DataLad containers)
 This dataset uses `datalad containers-run` so that all runs are captured with
-provenance. Add two container entries, one for Docker (local) and one for
-Apptainer/Singularity (HPC).
+provenance. Two containers are registered in `.datalad/config`:
+- `fmriprep-docker` (local, Docker Desktop)
+- `fmriprep-apptainer` (HPC, Apptainer/Singularity)
 
 ```bash
-datalad containers-add -n fmriprep-docker \
-  --url dhub://nipreps/fmriprep:25.2.4 \
-  --call-fmt 'docker run --rm -t -v "$BIDS_DIR_HOST":/bids:ro -v "$OUT_DIR_HOST":/out -v "$FMRIPREP_WORKDIR":/work -v "$TEMPLATEFLOW_HOME_HOST":/templateflow -v "$FS_LICENSE_FILE":/fs/license.txt -e TEMPLATEFLOW_HOME=/templateflow -e TEMPLATEFLOW_USE_DATALAD=on {img} {cmd}'
+micromamba run -n datalad datalad containers-list
 ```
 
-```bash
-datalad containers-add -n fmriprep-apptainer \
-  --url docker://nipreps/fmriprep:25.2.4 \
-  --call-fmt 'apptainer run --cleanenv -B "$BIDS_DIR_HOST":/bids:ro -B "$OUT_DIR_HOST":/out -B "$FMRIPREP_WORKDIR":/work -B "$TEMPLATEFLOW_HOME_HOST":/templateflow -B "$FS_LICENSE_FILE":/fs/license.txt --env TEMPLATEFLOW_HOME=/templateflow --env TEMPLATEFLOW_USE_DATALAD=on {img} {cmd}'
-```
+Container registration is stored in `.datalad/config` and therefore comes with
+the repository. You should only need `datalad containers-add` if you want to
+re-register or update the image tag.
 
 The SLURM script defaults to `fmriprep-docker`. Override with
 `--container-name fmriprep-apptainer` on HPC.
 
 ## Environment variables and secrets
-Required variables:
-- `TEMPLATEFLOW_HOME=<repo_root>/inputs/templateflow`
+Host-side variables used by the container definitions:
+- `INPUTS_DIR_HOST`: **absolute** path to `<repo_root>/inputs` (mounts to `/bids`)
+- `OUT_DIR_HOST`: absolute path to `<repo_root>/derivatives/fmriprep-25.2` (mounts to `/out`)
+- `TEMPLATEFLOW_HOME_HOST`: absolute path to `<repo_root>/inputs/templateflow` (mounts to `/templateflow`)
+- `FMRIPREP_WORKDIR`: absolute path to a writable work dir (mounts to `/work`)
+- `FS_LICENSE_FILE`: absolute path to `env/secrets/fs_license.txt` (mounts to `/fs/license.txt`)
+
+Note: mounting only `inputs/abide-both` will **break** symlink resolution.
+Always mount the full `inputs/` tree.
+
+Inside the container, the definitions set:
+- `TEMPLATEFLOW_HOME=/templateflow`
 - `TEMPLATEFLOW_USE_DATALAD=on`
-- `FS_LICENSE=<repo_root>/env/secrets/fs_license.txt`
 
 Create the secrets directory and license file (not tracked by Git):
 
@@ -84,16 +94,27 @@ mkdir -p env/secrets
 cp /path/to/license.txt env/secrets/fs_license.txt
 ```
 
+To silence DataLad's Git identity warning (recommended):
+
+```bash
+git config --global user.name "Your Name"
+git config --global user.email "you@example.com"
+```
+
 ## Local one-subject test (macOS, Docker)
 Examples for ABIDE I (CMU_a) and ABIDE II (BNI_1). These subject IDs exist in
 the current inputs. Note that `inputs/abide-both` is a symlink view, so the
 source subject must be fetched in the original dataset.
 
+Important: `INPUTS_DIR_HOST` must be an **absolute** path (recommended:
+`"$PWD/inputs"`). Do not use `inputs/` (Docker will treat it as a named volume
+and you'll end up with an empty `/bids` inside the container).
+
 ```bash
 # ABIDE I example
-datalad get -r inputs/abide1/CMU_a/sub-0050642
+micromamba run -n datalad datalad get -r inputs/abide1/CMU_a/sub-0050642
 
-export BIDS_DIR_HOST="$PWD/inputs/abide-both"
+export INPUTS_DIR_HOST="$PWD/inputs"
 export OUT_DIR_HOST="$PWD/derivatives/fmriprep-25.2"
 export TEMPLATEFLOW_HOME_HOST="$PWD/inputs/templateflow"
 export FMRIPREP_WORKDIR="$PWD/.tmp/fmriprep-work"
@@ -101,15 +122,15 @@ export FS_LICENSE_FILE="$PWD/env/secrets/fs_license.txt"
 
 mkdir -p "$FMRIPREP_WORKDIR"
 
-datalad containers-run -n fmriprep-docker \
+micromamba run -n datalad datalad containers-run -n fmriprep-docker \
   --explicit \
-  -m "fMRIPrep abide-both ABIDE1 CMU_a sub-v1+s1+0050642 (local test)" \
-  --input inputs/abide-both/sub-v1+s1+0050642 \
+  -m "fMRIPrep abide-both ABIDE1 CMU_a sub-v1+s0+0050642 (local test)" \
+  --input inputs/abide-both/sub-v1+s0+0050642 \
   --input inputs/abide1/CMU_a/sub-0050642 \
   --output derivatives/fmriprep-25.2 \
   -- \
-  /bids /out participant \
-    --participant-label v1+s1+0050642 \
+  /bids/abide-both /out participant \
+    --participant-label v1+s0+0050642 \
     --skip-bids-validation \
     --output-layout bids \
     --fs-license-file /fs/license.txt \
@@ -123,8 +144,8 @@ datalad containers-run -n fmriprep-docker \
 
 ```bash
 # ABIDE II example
-datalad get -r inputs/abide2/BNI_1/sub-29006
-export BIDS_DIR_HOST="$PWD/inputs/abide-both"
+micromamba run -n datalad datalad get -r inputs/abide2/BNI_1/sub-29006
+export INPUTS_DIR_HOST="$PWD/inputs"
 export OUT_DIR_HOST="$PWD/derivatives/fmriprep-25.2"
 export TEMPLATEFLOW_HOME_HOST="$PWD/inputs/templateflow"
 export FMRIPREP_WORKDIR="$PWD/.tmp/fmriprep-work"
@@ -144,16 +165,17 @@ If Apptainer is available on HES-SO, run the container registration there to
 avoid local Singularity build issues:
 
 ```bash
-micromamba run -n datalad datalad containers-add fmriprep-docker --update \
-  --url dhub://nipreps/fmriprep:25.2.4 \
-  --call-fmt 'docker run --rm -t -v "$BIDS_DIR_HOST":/bids:ro -v "$OUT_DIR_HOST":/out -v "$FMRIPREP_WORKDIR":/work -v "$TEMPLATEFLOW_HOME_HOST":/templateflow -v "$FS_LICENSE_FILE":/fs/license.txt -e TEMPLATEFLOW_HOME=/templateflow -e TEMPLATEFLOW_USE_DATALAD=on {img} {cmd}'
-
-micromamba run -n datalad datalad containers-add fmriprep-apptainer --update \
-  --url docker://nipreps/fmriprep:25.2.4 \
-  --call-fmt 'apptainer run --cleanenv -B "$BIDS_DIR_HOST":/bids:ro -B "$OUT_DIR_HOST":/out -B "$FMRIPREP_WORKDIR":/work -B "$TEMPLATEFLOW_HOME_HOST":/templateflow -B "$FS_LICENSE_FILE":/fs/license.txt --env TEMPLATEFLOW_HOME=/templateflow --env TEMPLATEFLOW_USE_DATALAD=on {img} {cmd}'
+micromamba run -n datalad datalad containers-list
 ```
 
-Auto-discover subjects from `inputs/abide-both` (filters are optional):
+Auto-discover subjects from `inputs/abide-both` (filters are optional).
+For the unfiltered run, the number of subjects is:
+
+```bash
+tail -n +2 inputs/abide-both/participants.tsv | wc -l
+```
+
+Filtered example:
 
 ```bash
 sbatch --array=1-N code/bootstrap_fmriprep_ARRAY.sbatch.sh \
@@ -166,7 +188,7 @@ sbatch --array=1-N code/bootstrap_fmriprep_ARRAY.sbatch.sh \
 Unfiltered run across all subjects (no dataset/site filters):
 
 ```bash
-sbatch --array=1-N code/bootstrap_fmriprep_ARRAY.sbatch.sh \
+sbatch --array=1-2194 code/bootstrap_fmriprep_ARRAY.sbatch.sh \
   --project-root /path/to/abide_fmriprep \
   --container-name fmriprep-apptainer
 ```

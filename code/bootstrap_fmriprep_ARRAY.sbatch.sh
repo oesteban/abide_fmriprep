@@ -284,7 +284,9 @@ echo "[INFO] Checking out processed job branch: $JOB_BRANCH"
 git -C "$OUT_DIR_HOST" checkout -b "$JOB_BRANCH"
 
 # Export vars consumed by the container call-format (configured via datalad containers-add)
-export BIDS_DIR_HOST="$BIDS_ROOT_HOST"
+# NOTE: We mount the full inputs/ tree so that relative symlinks in inputs/abide-both
+# can resolve to their targets in inputs/abide1 and inputs/abide2.
+export INPUTS_DIR_HOST="$JOB_CLONE/inputs"
 export OUT_DIR_HOST="$OUT_DIR_HOST"
 export TEMPLATEFLOW_HOME_HOST="$TEMPLATEFLOW_HOME_HOST"
 export FS_LICENSE_FILE="$FS_LICENSE_FILE"
@@ -310,7 +312,7 @@ datalad containers-run -n "$CONTAINER_NAME" \
   --input "$SOURCE_SUBPATH_REL" \
   --output "$PROC_REL" \
   -- \
-  /bids /out participant \
+  /bids/abide-both /out participant \
     --participant-label "$SUBJECT" \
     $BIDSVAL_FLAG \
     --output-layout "$OUTPUT_LAYOUT" \
