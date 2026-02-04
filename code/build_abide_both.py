@@ -207,76 +207,62 @@ def ensure_bold_sidecar(
 
     src_json = sidecar_json_path(src_bold)
 
-    # If the source JSON exists and already has RepetitionTime, just link it.
-    if src_json.exists() and not overwrite and not dry_run:
-        try:
-            datalad_get(src_json, dataset_dir, dry_run=dry_run)
-            src_meta = json.loads(src_json.read_text(encoding="utf-8"))
-        except Exception:
-            src_meta = {}
+    src_meta: Dict[str, object] = {}
+    if src_json.exists():
+        if dry_run:
+            print(f"[DRYRUN] would datalad get {src_json} to read metadata")
+        else:
+            try:
+                datalad_get(src_json, dataset_dir, dry_run=False)
+                loaded = json.loads(src_json.read_text(encoding="utf-8"))
+                if isinstance(loaded, dict):
+                    src_meta = loaded
+            except Exception:
+                src_meta = {}
 
-        rt = src_meta.get("RepetitionTime") if isinstance(src_meta, dict) else None
+    # Prefer an existing RepetitionTime in source JSON (if present and numeric).
+    tr_sec: Optional[float] = None
+    if not overwrite:
+        rt = src_meta.get("RepetitionTime")
         if isinstance(rt, (int, float)) and rt > 0:
-            # Create a symlink so we don't duplicate metadata.
-            safe_symlink(src_json, dest_json, link_type=link_type, dry_run=dry_run)
-            # Best-effort cleanup.
+            tr_sec = float(rt)
+
+    if tr_sec is None:
+        # Extract TR from the NIfTI header (requires file content).
+        datalad_get(src_bold, dataset_dir, dry_run=dry_run)
+        if dry_run:
+            print(f"[DRYRUN] would read TR from {src_bold}")
+            print(f"[DRYRUN] would drop {src_bold}")
+        else:
+            tr_sec = nifti_tr_seconds(src_bold)
             datalad_drop(
-                src_json,
+                src_bold,
                 dataset_dir,
-                dry_run=dry_run,
+                dry_run=False,
                 reckless_availability=reckless_availability_drop,
             )
-            return
-    elif src_json.exists() and not overwrite and dry_run:
-        # In dry-run mode we don't attempt to read JSON (might not be present).
-        print(f"[DRYRUN] would inspect {src_json} for existing RepetitionTime")
 
-    # Otherwise, extract TR from the NIfTI header (requires file content).
-    datalad_get(src_bold, dataset_dir, dry_run=dry_run)
+    meta: Dict[str, object] = dict(src_meta)
+    meta["RepetitionTime"] = round(float(tr_sec), 6)
+    task = parse_task_name(dest_bold.name)
+    if task and "TaskName" not in meta:
+        meta["TaskName"] = task
+
     if dry_run:
-        print(f"[DRYRUN] would read TR from {src_bold} and write {dest_json}")
-        print(f"[DRYRUN] would drop {src_bold}")
+        print(f"[DRYRUN] write {dest_json} <- keys={sorted(meta.keys())}")
         if src_json.exists():
             print(f"[DRYRUN] would drop {src_json}")
         return
 
-    tr_sec = nifti_tr_seconds(src_bold)
+    dest_json.parent.mkdir(parents=True, exist_ok=True)
+    dest_json.write_text(json.dumps(meta, indent=2, sort_keys=True) + "\n", encoding="utf-8")
 
-    meta: Dict[str, object] = {"RepetitionTime": round(float(tr_sec), 6)}
-    task = parse_task_name(dest_bold.name)
-    if task:
-        meta["TaskName"] = task
-
-    # Merge existing source JSON, if any.
-    if src_json.exists():
-        try:
-            datalad_get(src_json, dataset_dir, dry_run=dry_run)
-            src_meta = json.loads(src_json.read_text(encoding="utf-8"))
-        except Exception:
-            src_meta = {}
-        if isinstance(src_meta, dict):
-            merged = dict(src_meta)
-            merged.update(meta)
-            meta = merged
-
-    if dry_run:
-        print(f"[DRYRUN] write {dest_json} <- keys={sorted(meta.keys())}")
-    else:
-        dest_json.parent.mkdir(parents=True, exist_ok=True)
-        dest_json.write_text(json.dumps(meta, indent=2, sort_keys=True) + "\n", encoding="utf-8")
-
-    # Best-effort cleanup: free raw file content we only needed for the header.
-    datalad_drop(
-        src_bold,
-        dataset_dir,
-        dry_run=dry_run,
-        reckless_availability=reckless_availability_drop,
-    )
+    # Best-effort cleanup: JSON is small, but we can drop it if it lives in annex.
     if src_json.exists():
         datalad_drop(
             src_json,
             dataset_dir,
-            dry_run=dry_run,
+            dry_run=False,
             reckless_availability=reckless_availability_drop,
         )
 
