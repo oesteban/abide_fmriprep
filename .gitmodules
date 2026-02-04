@@ -6,3 +6,7 @@
 	path = inputs/abide2
 	url = https://datasets.datalad.org/abide2/RawData/.git
 	datalad-id = b1119aa8-db5d-11e7-bd5c-002590f97d84
+[submodule "derivatives/fmriprep-25.2"]
+	path = derivatives/fmriprep-25.2
+	url = ./derivatives/fmriprep-25.2
+	datalad-id = 7fcfb3bb-6b2e-4720-9641-7fc51dc6ed54
