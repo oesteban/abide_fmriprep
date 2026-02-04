@@ -14,3 +14,7 @@
 	path = inputs/templateflow
 	url = https://github.com/templateflow/templateflow.git
 	datalad-id = c79c47b6-d0fb-11e8-aa11-64006a8a730f
+[submodule "inputs/abide-both"]
+	path = inputs/abide-both
+	url = ./inputs/abide-both
+	datalad-id = d7665782-e1d4-4bc1-a027-f3a36ac51333
