@@ -47,7 +47,8 @@ micromamba run -n datalad datalad get -n derivatives/fmriprep-25.2
 relative symlinks. Build or refresh it with:
 
 ```bash
-micromamba run -n datalad python code/build_abide_both.py --project-root .
+# Fast build (no BOLD sidecar generation / no data downloads)
+micromamba run -n datalad python code/build_abide_both.py --project-root . --bold-sidecars none
 ```
 
 This creates:
@@ -62,25 +63,23 @@ If you need to rebuild from scratch (e.g., after changing the ID scheme), use
 micromamba run -n datalad python code/build_abide_both.py --project-root . --clean
 ```
 
-## ABIDE I BOLD JSON sidecars (RepetitionTime)
-ABIDE I does not ship functional JSON sidecars, but fMRIPrep/BIDS tooling
-requires (at minimum) `RepetitionTime`. The TR is stored in the NIfTI header,
-so we generate JSON sidecars **in `inputs/abide-both`** (we never modify
-`inputs/abide1`).
+## BOLD JSON sidecars (RepetitionTime)
+ABIDE I (and some ABIDE II sites) do not ship functional JSON sidecars with
+`RepetitionTime`. The TR is stored in the NIfTI header, so `code/build_abide_both.py`
+can generate JSON sidecars **in `inputs/abide-both`** (we never modify
+`inputs/abide1` or `inputs/abide2`).
 
-Generate sidecars for one participant:
+This step uses `datalad get` to obtain each needed BOLD file (so the header is
+available), writes a `*_bold.json` next to the (symlinked) BOLD file in
+`inputs/abide-both/`, and then runs `datalad drop` to free disk space.
 
-```bash
-python3 code/add_abide1_bold_json.py --project-root . --participant-id sub-v1s0x0050642
-micromamba run -n datalad datalad save -d inputs/abide-both -m "Add ABIDE I BOLD sidecars (TR) for sub-v1s0x0050642"
-```
-
-Or for all ABIDE I participants that are available locally (files not present
-will be skipped):
+To limit sidecar generation to a particular merged subject (recommended for
+local tests), use `--sidecar-participant-id`:
 
 ```bash
-python3 code/add_abide1_bold_json.py --project-root .
-micromamba run -n datalad datalad save -d inputs/abide-both -m "Add ABIDE I BOLD sidecars (TR)"
+micromamba run -n datalad python code/build_abide_both.py --project-root . \
+  --bold-sidecars tr \
+  --sidecar-participant-id sub-v1s0x0050642
 ```
 
 ## Container setup (DataLad containers)
@@ -147,8 +146,10 @@ and you'll end up with an empty `/bids` inside the container).
 # ABIDE I example
 micromamba run -n datalad datalad get -r inputs/abide1/CMU_a/sub-0050642
 
-# ABIDE I needs JSON sidecars for RepetitionTime (written into inputs/abide-both/)
-python3 code/add_abide1_bold_json.py --project-root . --participant-id sub-v1s0x0050642
+# Generate/update the BOLD JSON sidecar (RepetitionTime) in inputs/abide-both/
+micromamba run -n datalad python code/build_abide_both.py --project-root . \
+  --bold-sidecars tr \
+  --sidecar-participant-id sub-v1s0x0050642
 
 export INPUTS_DIR_HOST="$PWD/inputs"
 export OUT_DIR_HOST="$PWD/derivatives/fmriprep-25.2"
@@ -181,6 +182,12 @@ micromamba run -n datalad datalad containers-run -n fmriprep-docker \
 ```bash
 # ABIDE II example
 micromamba run -n datalad datalad get -r inputs/abide2/BNI_1/sub-29006
+
+# Generate/update the BOLD JSON sidecar (RepetitionTime) in inputs/abide-both/
+micromamba run -n datalad python code/build_abide_both.py --project-root . \
+  --bold-sidecars tr \
+  --sidecar-participant-id sub-v2s0x29006
+
 export INPUTS_DIR_HOST="$PWD/inputs"
 export OUT_DIR_HOST="$PWD/derivatives/fmriprep-25.2"
 export TEMPLATEFLOW_HOME_HOST="$PWD/inputs/templateflow"
