@@ -133,6 +133,19 @@ def parse_task_name(fname: str) -> Optional[str]:
     return None
 
 
+def parse_bids_entity(fname: str, entity: str) -> Optional[str]:
+    """Extract a BIDS entity value from a filename.
+
+    Example:
+      parse_bids_entity("..._acq-rc8chan_run-1_bold.nii.gz", "acq") -> "rc8chan"
+    """
+    prefix = f"{entity}-"
+    for part in fname.split("_"):
+        if part.startswith(prefix) and len(part) > len(prefix):
+            return part[len(prefix) :]
+    return None
+
+
 def is_bold_nifti(path: Path) -> bool:
     name = path.name
     return name.endswith("_bold.nii.gz") or name.endswith("_bold.nii")
@@ -255,6 +268,48 @@ def iter_source_files(subject_dir: Path) -> Iterable[Path]:
             yield Path(root) / fname
 
 
+def load_site_template_json(
+    src_repo_dir: Path,
+    template_name: str,
+    *,
+    dry_run: bool,
+    force_drop: bool,
+    site_template_cache: Dict[Tuple[Path, str], Dict[str, Any]],
+) -> Dict[str, Any]:
+    """Load a site-level JSON template from a source dataset (best-effort).
+
+    ABIDE stores most metadata in the site root (BIDS inheritance), e.g.:
+      - task-rest_bold.json
+      - task-rest_acq-rc8chan_bold.json
+      - T1w.json
+      - acq-rc8chan_T1w.json
+
+    These files are typically annexed. We fetch them on-demand, read JSON, and
+    then drop to avoid accumulating content during large builds.
+    """
+    cache_key = (src_repo_dir, template_name)
+    if cache_key in site_template_cache:
+        return dict(site_template_cache[cache_key])
+
+    meta: Dict[str, Any] = {}
+    template_path = src_repo_dir / template_name
+    if path_looks_tracked(template_path):
+        if dry_run:
+            print(f"[DRYRUN] would git-annex get {src_repo_dir}/{template_name} (site template)")
+        else:
+            try:
+                annex_get(src_repo_dir, Path(template_name), dry_run=False)
+                loaded = json.loads(template_path.read_text(encoding="utf-8"))
+                if isinstance(loaded, dict):
+                    meta = loaded
+            except Exception:
+                meta = {}
+            annex_drop(src_repo_dir, Path(template_name), dry_run=False, force=force_drop)
+
+    site_template_cache[cache_key] = dict(meta)
+    return dict(meta)
+
+
 def ensure_bold_sidecar(
     src_repo_dir: Path,
     src_bold_rel: Path,
@@ -286,27 +341,43 @@ def ensure_bold_sidecar(
     # Start from a site-level template (e.g., task-rest_bold.json), then overlay
     # any per-file JSON (if it exists).
     task = parse_task_name(dest_bold_abs.name) or parse_task_name(src_bold_rel.name)
+    acq = parse_bids_entity(dest_bold_abs.name, "acq") or parse_bids_entity(src_bold_rel.name, "acq")
+
+    # Apply BIDS inheritance within the source site:
+    # 1) task-level template (task-<task>_bold.json)
+    # 2) task+acq template (task-<task>_acq-<acq>_bold.json), if present
     template_meta: Dict[str, Any] = {}
     if task:
-        template_name = f"task-{task}_bold.json"
-        cache_key = (src_repo_dir, template_name)
-        if cache_key in site_template_cache:
-            template_meta = dict(site_template_cache[cache_key])
-        else:
-            template_path = src_repo_dir / template_name
-            if path_looks_tracked(template_path):
-                if dry_run:
-                    print(f"[DRYRUN] would git-annex get {src_repo_dir}/{template_name} (site template)")
-                else:
-                    try:
-                        annex_get(src_repo_dir, Path(template_name), dry_run=False)
-                        loaded = json.loads(template_path.read_text(encoding="utf-8"))
-                        if isinstance(loaded, dict):
-                            template_meta = loaded
-                    except Exception:
-                        template_meta = {}
-                    annex_drop(src_repo_dir, Path(template_name), dry_run=False, force=force_drop)
-            site_template_cache[cache_key] = dict(template_meta)
+        template_meta.update(
+            load_site_template_json(
+                src_repo_dir,
+                f"task-{task}_bold.json",
+                dry_run=dry_run,
+                force_drop=force_drop,
+                site_template_cache=site_template_cache,
+            )
+        )
+    if task and acq:
+        template_meta.update(
+            load_site_template_json(
+                src_repo_dir,
+                f"task-{task}_acq-{acq}_bold.json",
+                dry_run=dry_run,
+                force_drop=force_drop,
+                site_template_cache=site_template_cache,
+            )
+        )
+    elif acq:
+        # Rare fallback: acquisition-level template without a task entity.
+        template_meta.update(
+            load_site_template_json(
+                src_repo_dir,
+                f"acq-{acq}_bold.json",
+                dry_run=dry_run,
+                force_drop=force_drop,
+                site_template_cache=site_template_cache,
+            )
+        )
 
     src_meta: Dict[str, Any] = {}
     if path_looks_tracked(src_json_abs):
@@ -376,26 +447,31 @@ def ensure_t1w_sidecar(
     if dest_json.exists() and not overwrite:
         return
 
-    template_name = "T1w.json"
+    acq = parse_bids_entity(dest_t1w_abs.name, "acq") or parse_bids_entity(src_t1w_rel.name, "acq")
+
+    # Apply BIDS inheritance within the source site:
+    # 1) site-level template (T1w.json)
+    # 2) acq-level template (acq-<acq>_T1w.json), if present
     template_meta: Dict[str, Any] = {}
-    cache_key = (src_repo_dir, template_name)
-    if cache_key in site_template_cache:
-        template_meta = dict(site_template_cache[cache_key])
-    else:
-        template_path = src_repo_dir / template_name
-        if path_looks_tracked(template_path):
-            if dry_run:
-                print(f"[DRYRUN] would git-annex get {src_repo_dir}/{template_name} (site template)")
-            else:
-                try:
-                    annex_get(src_repo_dir, Path(template_name), dry_run=False)
-                    loaded = json.loads(template_path.read_text(encoding="utf-8"))
-                    if isinstance(loaded, dict):
-                        template_meta = loaded
-                except Exception:
-                    template_meta = {}
-                annex_drop(src_repo_dir, Path(template_name), dry_run=False, force=force_drop)
-        site_template_cache[cache_key] = dict(template_meta)
+    template_meta.update(
+        load_site_template_json(
+            src_repo_dir,
+            "T1w.json",
+            dry_run=dry_run,
+            force_drop=force_drop,
+            site_template_cache=site_template_cache,
+        )
+    )
+    if acq:
+        template_meta.update(
+            load_site_template_json(
+                src_repo_dir,
+                f"acq-{acq}_T1w.json",
+                dry_run=dry_run,
+                force_drop=force_drop,
+                site_template_cache=site_template_cache,
+            )
+        )
 
     src_json_rel = sidecar_json_path(src_t1w_rel)
     src_json_abs = src_repo_dir / src_json_rel
@@ -899,9 +975,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--sidecars",
         choices=["none", "template", "tr"],
-        default="tr",
+        default="template",
         help=(
-            "Sidecar generation mode (default: tr). "
+            "Sidecar generation mode (default: template). "
             "'template' copies site-level JSON templates; "
             "'tr' also ensures RepetitionTime for BOLD by reading NIfTI headers."
         ),

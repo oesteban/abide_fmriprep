@@ -57,7 +57,7 @@ micromamba run -n datalad datalad get -r inputs/abide-both/sub-<ID>
 
 ```bash
 # Fast build (register files/URLs only; no sidecar creation)
-python3 code/build_abide_both.py --project-root . --sidecars none
+micromamba run -n datalad python3 code/build_abide_both.py --project-root . --sidecars none
 ```
 
 This creates:
@@ -69,7 +69,7 @@ If you need to rebuild from scratch (e.g., after changing the ID scheme), use
 `--clean` **with caution** (it deletes `inputs/abide-both/sub-*`):
 
 ```bash
-python3 code/build_abide_both.py --project-root . --clean
+micromamba run -n datalad python3 code/build_abide_both.py --project-root . --clean
 ```
 
 ## Materialize BIDS metadata into Git (recommended)
@@ -86,7 +86,7 @@ materialize BIDS metadata **into Git**:
 - keeps imaging binaries (`*.nii.gz`, etc.) annexed
 
 ```bash
-python3 code/build_abide_both.py --project-root . \
+micromamba run -n datalad python3 code/build_abide_both.py --project-root . \
   --skip-build \
   --materialize-metadata \
   --metadata-jobs 8
@@ -117,9 +117,24 @@ ABIDE I (and some ABIDE II sites) do not ship functional JSON sidecars with
 can generate JSON sidecars **in `inputs/abide-both`** (we never modify
 `inputs/abide1` or `inputs/abide2`).
 
+In practice, both ABIDE I and ABIDE II provide *site-level* templates
+(`task-*_bold.json`, `T1w.json`). Since `inputs/abide-both` merges all sites into
+one dataset (no site folder level), we duplicate that metadata next to each
+NIfTI as a per-file sidecar (BIDS inheritance no longer applies cleanly by
+site).
+
 This step copies site-level templates (e.g., `task-rest_bold.json`, `T1w.json`)
 from each site dataset, and can (optionally) read the TR from the NIfTI header
 when `RepetitionTime` is missing.
+
+To (re)generate sidecars for the entire dataset (fast; no NIfTI downloads),
+run:
+
+```bash
+micromamba run -n datalad python3 code/build_abide_both.py --project-root . \
+  --sidecars template \
+  --overwrite-sidecars
+```
 
 When TR extraction is enabled, the script temporarily downloads each needed
 BOLD NIfTI **in the source site dataset** using `git-annex get`, reads the
@@ -131,7 +146,7 @@ To limit sidecar generation to a particular merged subject (recommended for
 local tests), use `--sidecar-participant-id`:
 
 ```bash
-python3 code/build_abide_both.py --project-root . \
+micromamba run -n datalad python3 code/build_abide_both.py --project-root . \
   --sidecars tr \
   --sidecar-participant-id sub-v1s0x0050642
 ```
@@ -204,7 +219,7 @@ and you'll end up with an empty `/bids` inside the container).
 micromamba run -n datalad datalad get -r inputs/abide-both/sub-v1s0x0050642
 
 # Generate/update JSON sidecars (copies site templates; adds RepetitionTime from header)
-python3 code/build_abide_both.py --project-root . \
+micromamba run -n datalad python3 code/build_abide_both.py --project-root . \
   --sidecars tr \
   --sidecar-participant-id sub-v1s0x0050642
 
@@ -239,7 +254,7 @@ micromamba run -n datalad datalad containers-run -n fmriprep-docker \
 # ABIDE II example
 micromamba run -n datalad datalad get -r inputs/abide-both/sub-v2s0x29006
 
-python3 code/build_abide_both.py --project-root . \
+micromamba run -n datalad python3 code/build_abide_both.py --project-root . \
   --sidecars tr \
   --sidecar-participant-id sub-v2s0x29006
 
