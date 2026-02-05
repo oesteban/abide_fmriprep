@@ -106,9 +106,10 @@ git -C inputs/abide-both add -A
 git -C inputs/abide-both commit -m "abide-both: materialize metadata into git"
 ```
 
-Important: do **not** update/push the superdataset pointer (root `git commit` /
-`datalad save`) to GitHub until `inputs/abide-both` has a proper publication
-target (e.g., `gin` or an institutional Git+annex remote).
+Important: if you plan to publish the *superdataset* to GitHub, make sure the
+`inputs/abide-both` subdataset commit is also published somewhere reachable
+from the URL recorded in `.gitmodules` (e.g., a dedicated GitHub repo for the
+subdataset). Otherwise, fresh clones will not be able to install the subdataset.
 
 ## BOLD JSON sidecars (RepetitionTime)
 ABIDE I (and some ABIDE II sites) do not ship functional JSON sidecars with
