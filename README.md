@@ -13,7 +13,7 @@ dataset layout and DataLad for provenance and reproducibility.
 ## Inputs and data sources
 - `inputs/abide1` (ABIDE I RawDataBIDS)
 - `inputs/abide2` (ABIDE II RawData)
-- `inputs/abide-both` (merged BIDS view via relative symlinks)
+- `inputs/abide-both` (merged BIDS view, self-contained git-annex dataset; normalized layout + registered web URLs)
 - `inputs/templateflow` (TemplateFlow subdatasets)
 
 ## Prerequisites (portable)
@@ -38,30 +38,77 @@ cd abide_fmriprep
 2. Install subdatasets without downloading data.
 
 ```bash
-micromamba run -n datalad datalad get -n inputs/abide1 inputs/abide2 inputs/abide-both inputs/templateflow
-micromamba run -n datalad datalad get -n derivatives/fmriprep-25.2
+micromamba run -n datalad datalad get -n inputs/abide-both inputs/templateflow derivatives/fmriprep-25.2
+
+# Install the ABIDE site subdatasets (metadata only; required to build inputs/abide-both)
+micromamba run -n datalad datalad get -n -r inputs/abide1
+micromamba run -n datalad datalad get -n -r inputs/abide2
 ```
 
 ## Build the merged input (`inputs/abide-both`)
-`inputs/abide-both` provides a unified BIDS view across ABIDE I and II using
-relative symlinks. Build or refresh it with:
+`inputs/abide-both` provides a unified BIDS view across ABIDE I and II as a
+**self-contained** git-annex dataset (no cross-dataset symlinks). The build
+reuses the original annex keys and registers the original HTTP URL(s) in the
+merged dataset's `web` remote, so later runs can do:
 
 ```bash
-# Fast build (no BOLD sidecar generation / no data downloads)
-micromamba run -n datalad python code/build_abide_both.py --project-root . --bold-sidecars none
+micromamba run -n datalad datalad get -r inputs/abide-both/sub-<ID>
+```
+
+```bash
+# Fast build (register files/URLs only; no sidecar creation)
+python3 code/build_abide_both.py --project-root . --sidecars none
 ```
 
 This creates:
 - `inputs/abide-both/participants.tsv`
 - `inputs/abide-both/dataset_description.json`
-- `inputs/abide-both/sub-...` (symlinked subject trees)
+- `inputs/abide-both/sub-...` (git-annex-managed subject trees; content retrievable via `web`)
 
 If you need to rebuild from scratch (e.g., after changing the ID scheme), use
 `--clean` **with caution** (it deletes `inputs/abide-both/sub-*`):
 
 ```bash
-micromamba run -n datalad python code/build_abide_both.py --project-root . --clean
+python3 code/build_abide_both.py --project-root . --clean
 ```
+
+## Materialize BIDS metadata into Git (recommended)
+The merged dataset is built by reusing annex keys and registering original HTTP
+URLs. This means **all files** initially exist as git-annex pointers, including
+small metadata files (JSON/TSV/bval/bvec/...).
+
+That works, but it can make BIDS indexing/validation slow (lots of tiny
+downloads). To keep `inputs/abide-both` fast and robust for pipelines, you can
+materialize BIDS metadata **into Git**:
+
+- downloads metadata content with `git annex get`
+- runs `git annex unannex` so the content becomes regular Git-tracked files
+- keeps imaging binaries (`*.nii.gz`, etc.) annexed
+
+```bash
+python3 code/build_abide_both.py --project-root . \
+  --skip-build \
+  --materialize-metadata \
+  --metadata-jobs 8
+```
+
+Optional knobs:
+- `--metadata-max-mb 50` (skip unexpectedly huge “metadata” files)
+- `--metadata-report <path>` (write a JSON report somewhere else)
+
+The default report is written to:
+`inputs/abide-both/.datalad/metadata_materialization_report.json`.
+
+After a successful run, commit **inside the subdataset** (local only):
+
+```bash
+git -C inputs/abide-both add -A
+git -C inputs/abide-both commit -m "abide-both: materialize metadata into git"
+```
+
+Important: do **not** update/push the superdataset pointer (root `git commit` /
+`datalad save`) to GitHub until `inputs/abide-both` has a proper publication
+target (e.g., `gin` or an institutional Git+annex remote).
 
 ## BOLD JSON sidecars (RepetitionTime)
 ABIDE I (and some ABIDE II sites) do not ship functional JSON sidecars with
@@ -69,16 +116,22 @@ ABIDE I (and some ABIDE II sites) do not ship functional JSON sidecars with
 can generate JSON sidecars **in `inputs/abide-both`** (we never modify
 `inputs/abide1` or `inputs/abide2`).
 
-This step uses `datalad get` to obtain each needed BOLD file (so the header is
-available), writes a `*_bold.json` next to the (symlinked) BOLD file in
-`inputs/abide-both/`, and then runs `datalad drop` to free disk space.
+This step copies site-level templates (e.g., `task-rest_bold.json`, `T1w.json`)
+from each site dataset, and can (optionally) read the TR from the NIfTI header
+when `RepetitionTime` is missing.
+
+When TR extraction is enabled, the script temporarily downloads each needed
+BOLD NIfTI **in the source site dataset** using `git-annex get`, reads the
+header, writes a `*_bold.json` sidecar in `inputs/abide-both`, and then drops
+the fetched NIfTI to free disk space (default: `git annex drop --force`; use
+`--safe-drop` to avoid `--force`).
 
 To limit sidecar generation to a particular merged subject (recommended for
 local tests), use `--sidecar-participant-id`:
 
 ```bash
-micromamba run -n datalad python code/build_abide_both.py --project-root . \
-  --bold-sidecars tr \
+python3 code/build_abide_both.py --project-root . \
+  --sidecars tr \
   --sidecar-participant-id sub-v1s0x0050642
 ```
 
@@ -107,8 +160,11 @@ Host-side variables used by the container definitions:
 - `FMRIPREP_WORKDIR`: absolute path to a writable work dir (mounts to `/work`)
 - `FS_LICENSE_FILE`: absolute path to `env/secrets/fs_license.txt` (mounts to `/fs/license.txt`)
 
-Note: mounting only `inputs/abide-both` will **break** symlink resolution.
-Always mount the full `inputs/` tree.
+With the current container definitions, the recommended setting is still:
+`INPUTS_DIR_HOST="$PWD/inputs"` and BIDS root `/bids/abide-both`. Since
+`inputs/abide-both` is now self-contained, you *can* mount only
+`inputs/abide-both` if you also adjust the BIDS root argument passed to
+fMRIPrep (e.g., `/bids` instead of `/bids/abide-both`).
 
 Inside the container, the definitions set:
 - `TEMPLATEFLOW_HOME=/templateflow`
@@ -135,8 +191,7 @@ git config --global user.email "you@example.com"
 
 ## Local one-subject test (macOS, Docker)
 Examples for ABIDE I (CMU_a) and ABIDE II (BNI_1). These subject IDs exist in
-the current inputs. Note that `inputs/abide-both` is a symlink view, so the
-source subject must be fetched in the original dataset.
+the current inputs.
 
 Important: `INPUTS_DIR_HOST` must be an **absolute** path (recommended:
 `"$PWD/inputs"`). Do not use `inputs/` (Docker will treat it as a named volume
@@ -144,11 +199,12 @@ and you'll end up with an empty `/bids` inside the container).
 
 ```bash
 # ABIDE I example
-micromamba run -n datalad datalad get -r inputs/abide1/CMU_a/sub-0050642
+# Fetch the merged subject directly (self-contained dataset)
+micromamba run -n datalad datalad get -r inputs/abide-both/sub-v1s0x0050642
 
-# Generate/update the BOLD JSON sidecar (RepetitionTime) in inputs/abide-both/
-micromamba run -n datalad python code/build_abide_both.py --project-root . \
-  --bold-sidecars tr \
+# Generate/update JSON sidecars (copies site templates; adds RepetitionTime from header)
+python3 code/build_abide_both.py --project-root . \
+  --sidecars tr \
   --sidecar-participant-id sub-v1s0x0050642
 
 export INPUTS_DIR_HOST="$PWD/inputs"
@@ -163,7 +219,6 @@ micromamba run -n datalad datalad containers-run -n fmriprep-docker \
   --explicit \
   -m "fMRIPrep abide-both ABIDE1 CMU_a sub-v1s0x0050642 (local test)" \
   --input inputs/abide-both/sub-v1s0x0050642 \
-  --input inputs/abide1/CMU_a/sub-0050642 \
   --output derivatives/fmriprep-25.2 \
   -- \
   /bids/abide-both /out participant \
@@ -181,11 +236,10 @@ micromamba run -n datalad datalad containers-run -n fmriprep-docker \
 
 ```bash
 # ABIDE II example
-micromamba run -n datalad datalad get -r inputs/abide2/BNI_1/sub-29006
+micromamba run -n datalad datalad get -r inputs/abide-both/sub-v2s0x29006
 
-# Generate/update the BOLD JSON sidecar (RepetitionTime) in inputs/abide-both/
-micromamba run -n datalad python code/build_abide_both.py --project-root . \
-  --bold-sidecars tr \
+python3 code/build_abide_both.py --project-root . \
+  --sidecars tr \
   --sidecar-participant-id sub-v2s0x29006
 
 export INPUTS_DIR_HOST="$PWD/inputs"
@@ -198,7 +252,7 @@ mkdir -p "$FMRIPREP_WORKDIR"
 
 Then reuse the same `datalad containers-run` command, swapping the subject
 label to `v2s0x29006` and the input paths to
-`inputs/abide-both/sub-v2s0x29006` and `inputs/abide2/BNI_1/sub-29006`.
+`inputs/abide-both/sub-v2s0x29006`.
 
 ## HPC / SLURM usage (HES-SO)
 Module load commands and partitions are TBD. A micromamba environment is the
@@ -248,8 +302,8 @@ sbatch --array=1-N code/bootstrap_fmriprep_ARRAY.sbatch.sh \
 ```
 
 Scratch behavior uses `$SLURM_TMPDIR` when available, otherwise `/tmp`.
-The SLURM script resolves symlinks in `inputs/abide-both` and fetches data
-from the original `inputs/abide1`/`inputs/abide2` datasets.
+The SLURM script fetches each subject directly from `inputs/abide-both`
+(self-contained dataset with registered web URLs).
 
 ## Output naming scheme
 Subjects are normalized in `inputs/abide-both` as:

@@ -54,17 +54,6 @@ lookup_participant() {
   ' "$participants_tsv"
 }
 
-resolve_symlink_abs() {
-  local symlink_path="$1"
-  python - "$symlink_path" <<'PY'
-import os, sys
-path = sys.argv[1]
-target = os.readlink(path)
-abs_target = os.path.abspath(os.path.join(os.path.dirname(path), target))
-print(abs_target)
-PY
-}
-
 # -------------------------
 # Args
 # -------------------------
@@ -145,8 +134,6 @@ fi
 # -------------------------
 # YODA-relative paths inside project-root
 # -------------------------
-ABIDE1_REL="inputs/abide1"
-ABIDE2_REL="inputs/abide2"
 BOTH_REL="inputs/abide-both"
 TF_REL="inputs/templateflow"
 PROC_REL="derivatives/fmriprep-25.2"
@@ -212,12 +199,6 @@ PARTICIPANT_ROW="$(lookup_participant "$PARTICIPANTS_TSV" "$PARTICIPANT_ID")"
 [[ -n "$PARTICIPANT_ROW" ]] || die "Subject not found in participants.tsv: $PARTICIPANT_ID"
 
 IFS=$'\t' read -r SOURCE_DATASET SOURCE_SITE SITE_INDEX SOURCE_SUBJECT <<<"$PARTICIPANT_ROW"
-case "$SOURCE_DATASET" in
-  abide1) SOURCE_REL="$ABIDE1_REL" ;;
-  abide2) SOURCE_REL="$ABIDE2_REL" ;;
-  *) die "Unknown source dataset in participants.tsv: $SOURCE_DATASET" ;;
-esac
-SOURCE_SUBPATH_REL="${SOURCE_REL}/${SOURCE_SITE}/sub-${SOURCE_SUBJECT}"
 
 echo "[INFO] PROJECT_ROOT=$PROJECT_ROOT"
 echo "[INFO] FILTER_DATASET=${DATASET:-<none>}  FILTER_SITE=${SITE:-<none>}"
@@ -250,25 +231,16 @@ cd "$JOB_CLONE"
 # Install (but don't download) the processed subdataset so we can commit into it
 datalad get -n "$PROC_REL"
 
-# Ensure merged input and source subdatasets are installed in the clone (metadata only)
+# Ensure merged input subdataset is installed in the clone (metadata only)
 datalad get -n "$BOTH_REL"
-datalad get -n "$SOURCE_REL"
 
-# Resolve a symlink in the merged view to ensure we fetch data from the source dataset
+# Get the one subject (recursively) in the merged dataset.
+# inputs/abide-both is a self-contained git-annex dataset (no cross-dataset symlinks),
+# so we can retrieve content directly from its registered web URLs.
 BOTH_SUBDIR_REL="${BOTH_REL}/sub-${SUBJECT}"
 BOTH_SUBDIR_ABS="$JOB_CLONE/$BOTH_SUBDIR_REL"
-[[ -d "$BOTH_SUBDIR_ABS" ]] || die "Merged subject directory missing: $BOTH_SUBDIR_ABS"
-FIRST_LINK="$(find "$BOTH_SUBDIR_ABS" -type l | head -n 1)"
-[[ -n "$FIRST_LINK" ]] || die "No symlinks found under merged subject: $BOTH_SUBDIR_ABS"
-TARGET_ABS="$(resolve_symlink_abs "$FIRST_LINK")"
-EXPECTED_PREFIX="$JOB_CLONE/$SOURCE_SUBPATH_REL/"
-if [[ "$TARGET_ABS" != "$EXPECTED_PREFIX"* ]]; then
-  die "Symlink target does not match source dataset. Expected prefix: $EXPECTED_PREFIX ; got: $TARGET_ABS"
-fi
-
-# Get the one subject (recursively, so func/anat are present) in the source dataset
-echo "[INFO] datalad get source subject: $SOURCE_SUBPATH_REL"
-datalad get -r "$SOURCE_SUBPATH_REL"
+echo "[INFO] datalad get merged subject: $BOTH_SUBDIR_REL"
+datalad get -r "$BOTH_SUBDIR_REL"
 
 # BIDS root is the merged dataset
 BIDS_ROOT_HOST="$JOB_CLONE/$BOTH_REL"
@@ -284,8 +256,8 @@ echo "[INFO] Checking out processed job branch: $JOB_BRANCH"
 git -C "$OUT_DIR_HOST" checkout -b "$JOB_BRANCH"
 
 # Export vars consumed by the container call-format (configured via datalad containers-add)
-# NOTE: We mount the full inputs/ tree so that relative symlinks in inputs/abide-both
-# can resolve to their targets in inputs/abide1 and inputs/abide2.
+# NOTE: The shipped container definition mounts INPUTS_DIR_HOST to /bids, and
+# we pass /bids/abide-both as the BIDS root to fMRIPrep.
 export INPUTS_DIR_HOST="$JOB_CLONE/inputs"
 export OUT_DIR_HOST="$OUT_DIR_HOST"
 export TEMPLATEFLOW_HOME_HOST="$TEMPLATEFLOW_HOME_HOST"
@@ -303,13 +275,12 @@ if [[ "$SKIP_BIDS_VALIDATION" == "1" ]]; then
   BIDSVAL_FLAG="--skip-bids-validation"
 fi
 
-# CIFTI default resolution is 91k; 170k also supported :contentReference[oaicite:3]{index=3}
+# CIFTI default resolution is 91k; 170k also supported.
 echo "[INFO] Running fMRIPrep via datalad containers-run"
 datalad containers-run -n "$CONTAINER_NAME" \
   --explicit \
   -m "fMRIPrep abide-both ${SOURCE_DATASET} ${SOURCE_SITE} sub-${SUBJECT}" \
   --input "$BOTH_SUBDIR_REL" \
-  --input "$SOURCE_SUBPATH_REL" \
   --output "$PROC_REL" \
   -- \
   /bids/abide-both /out participant \
@@ -334,6 +305,6 @@ datalad -d "$OUT_DIR_HOST" drop -r .
 
 # Drop raw subject in the job clone (step 4)
 echo "[INFO] Dropping raw subject content from job clone"
-datalad -d "$JOB_CLONE" drop -r "$SOURCE_SUBPATH_REL" || true
+datalad -d "$JOB_CLONE" drop -r "$BOTH_SUBDIR_REL" || true
 
 echo "[INFO] DONE. Job scratch: $JOB_SCRATCH"
