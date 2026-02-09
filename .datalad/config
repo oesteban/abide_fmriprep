@@ -3,7 +3,7 @@
 [datalad "containers"]
 	enabled = true
 [datalad "containers.fmriprep-apptainer"]
-	image = docker:/nipreps/fmriprep:25.2.4
+	image = .datalad/environments/fmriprep-apptainer.sif
 	call-fmt = apptainer run --cleanenv -B \"$INPUTS_DIR_HOST\":/bids:ro -B \"$OUT_DIR_HOST\":/out -B \"$FMRIPREP_WORKDIR\":/work -B \"$TEMPLATEFLOW_HOME_HOST\":/templateflow -B \"$FS_LICENSE_FILE\":/fs/license.txt:ro --env TEMPLATEFLOW_HOME=/templateflow --env TEMPLATEFLOW_USE_DATALAD=on {img} {cmd}
 	cmdexec = apptainer run --cleanenv -B \"$INPUTS_DIR_HOST\":/bids:ro -B \"$OUT_DIR_HOST\":/out -B \"$FMRIPREP_WORKDIR\":/work -B \"$TEMPLATEFLOW_HOME_HOST\":/templateflow -B \"$FS_LICENSE_FILE\":/fs/license.txt:ro --env TEMPLATEFLOW_HOME=/templateflow --env TEMPLATEFLOW_USE_DATALAD=on {img} {cmd}
 [datalad "containers.fmriprep-docker"]
