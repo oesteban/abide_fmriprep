@@ -12,7 +12,7 @@ YODA (“Yoda's Organigram on Data Analysis”) is introduced
 - `code/` for project-specific scripts
 - `derivatives/` for outputs
 - `logs/` for SLURM log files
-- `env/` for local-only secrets (ignored by Git)
+- `env/` for environment specification and local-only secrets
 
 ## Inputs and data sources
 - `inputs/abide1` (ABIDE I RawDataBIDS)
@@ -20,12 +20,23 @@ YODA (“Yoda's Organigram on Data Analysis”) is introduced
 - `inputs/abide-both` (merged BIDS view, self-contained git-annex dataset; normalized layout + registered web URLs)
 - `inputs/templateflow` (TemplateFlow subdatasets)
 
-## Prerequisites (portable)
-- Git and git-annex
-- DataLad
-- Python 3.9+
-- Container runtime: Docker and Apptainer/Singularity
-- Optional: micromamba environment for local installs
+## Prerequisites
+
+1. Install [micromamba](https://mamba.readthedocs.io/en/latest/installation/micromamba-installation.html)
+   (or conda/mamba).
+
+2. Create the environment from the spec file:
+
+   ```bash
+   micromamba create -f env/environment.yml
+   ```
+
+3. Install **git-annex** (not available via conda-forge on all platforms):
+   - macOS: `brew install git-annex`
+   - Linux: `conda install -n datalad -c conda-forge git-annex`, or use your
+     system package manager.
+
+4. A container runtime: **Docker** (local) or **Apptainer/Singularity** (HPC).
 
 All DataLad commands below assume `datalad` is on your `PATH`. If it isn't,
 either `micromamba activate datalad` first, or prefix commands with
