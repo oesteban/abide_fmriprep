@@ -1,7 +1,11 @@
 # ABIDE-fMRIPrep
 
-Preprocess ABIDE I and ABIDE II with fMRIPrep on HES-SO, using a YODA
-dataset layout and DataLad for provenance and reproducibility.
+Preprocess ABIDE I and ABIDE II with fMRIPrep on HES-SO, using a
+[YODA-compliant](https://handbook.datalad.org/en/latest/basics/101-127-yoda.html)
+data analysis project implementation, using DataLad for provenance and reproducibility.
+
+YODA (“Yoda's Organigram on Data Analysis”) is introduced
+[here](https://handbook.datalad.org/en/latest/basics/101-127-yoda.html)
 
 ## Layout (YODA)
 - `inputs/` for upstream datasets and building blocks
