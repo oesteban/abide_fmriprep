@@ -18,3 +18,6 @@
 	path = inputs/abide-both
 	url = https://github.com/oesteban/abide-merged.git
 	datalad-id = d7665782-e1d4-4bc1-a027-f3a36ac51333
+[submodule "docs/paper"]
+	path = docs/paper
+	url = git@github.com:oesteban/abide-paper.git
