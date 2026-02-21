@@ -4,7 +4,7 @@
 #SBATCH --error=logs/%x_%A_%a.err
 #SBATCH --cpus-per-task=16
 #SBATCH --mem=64G
-#SBATCH --time=24:00:00
+#SBATCH --time=10:00:00
 
 set -euo pipefail
 
@@ -15,24 +15,6 @@ die() { echo "[FATAL] $*" >&2; exit 2; }
 
 need_cmd() {
   command -v "$1" >/dev/null 2>&1 || die "Missing required command: $1"
-}
-
-with_lock() {
-  local lockfile="$1"; shift
-  mkdir -p "$(dirname "$lockfile")"
-  exec 9>"$lockfile"
-  flock -x 9
-  "$@"
-  flock -u 9
-}
-
-prefetch_templateflow_all() {
-  local tf_ds="$1"     # absolute path to templateflow dataset
-  local lockfile="$2"  # absolute path to lock file on shared FS
-  with_lock "$lockfile" bash -lc "
-    cd '$tf_ds'
-    datalad get -r .
-  "
 }
 
 list_subjects_from_participants() {
@@ -143,7 +125,6 @@ PROC_REL="derivatives/fmriprep-25.2"
 # -------------------------
 need_cmd datalad
 need_cmd git
-need_cmd flock
 
 [[ -d "$PROJECT_ROOT" ]] || die "Project root not found: $PROJECT_ROOT"
 git -C "$PROJECT_ROOT" rev-parse --is-inside-work-tree >/dev/null 2>&1 \
@@ -205,13 +186,6 @@ echo "[INFO] FILTER_DATASET=${DATASET:-<none>}  FILTER_SITE=${SITE:-<none>}"
 echo "[INFO] SUBJECT=sub-${SUBJECT}  SOURCE_DATASET=$SOURCE_DATASET  SOURCE_SITE=$SOURCE_SITE  SOURCE_SUBJECT=$SOURCE_SUBJECT  SITE_INDEX=$SITE_INDEX"
 echo "[INFO] TEMPLATEFLOW_HOME_HOST=$TEMPLATEFLOW_HOME_HOST"
 echo "[INFO] CONTAINER_NAME=$CONTAINER_NAME  GIN_REMOTE=$GIN_REMOTE"
-
-# -------------------------
-# Prefetch TemplateFlow once (locked, shared FS)
-# -------------------------
-TF_LOCK="$PROJECT_ROOT/.git/bootstrap_locks/templateflow_all.lock"
-echo "[INFO] Prefetching TemplateFlow in canonical project (locked): $TEMPLATEFLOW_HOME_HOST"
-prefetch_templateflow_all "$TEMPLATEFLOW_HOME_HOST" "$TF_LOCK"
 
 # -------------------------
 # Job-local clone (concurrency-safe)
