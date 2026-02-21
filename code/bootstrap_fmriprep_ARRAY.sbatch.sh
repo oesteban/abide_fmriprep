@@ -249,6 +249,14 @@ if [[ "$SKIP_BIDS_VALIDATION" == "1" ]]; then
   BIDSVAL_FLAG="--skip-bids-validation"
 fi
 
+# Ensure the container image is available before containers-run
+# (datalad containers-run's internal get may fail on clones; explicit get works)
+CONTAINER_IMAGE="$(git config --file .datalad/config --get "datalad.containers.${CONTAINER_NAME}.image")"
+if [[ -n "$CONTAINER_IMAGE" ]]; then
+  echo "[INFO] Pre-fetching container image: $CONTAINER_IMAGE"
+  datalad get "$CONTAINER_IMAGE"
+fi
+
 # CIFTI default resolution is 91k; 170k also supported.
 echo "[INFO] Running fMRIPrep via datalad containers-run"
 datalad containers-run -n "$CONTAINER_NAME" \
