@@ -5,6 +5,5 @@ sub-v1s13x0050002
 sub-v1s16x0051160
 sub-v2s0x29006
 sub-v2s2x29057
-sub-v2s3x28741
 sub-v2s6x29273
 sub-v2s13x29096
