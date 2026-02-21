@@ -252,13 +252,13 @@ if [[ "$SKIP_BIDS_VALIDATION" == "1" ]]; then
   BIDSVAL_FLAG="--skip-bids-validation"
 fi
 
-# Resolve container image: CLI flag > FMRIPREP_SIF env var > .datalad/config
+# Resolve container image: CLI flag > FMRIPREP_SIF env var
 : "${CONTAINER_IMAGE:=${FMRIPREP_SIF:-}}"
 if [[ -n "$CONTAINER_IMAGE" ]]; then
   [[ -f "$CONTAINER_IMAGE" ]] || die "Container image not found: $CONTAINER_IMAGE"
-  echo "[INFO] Overriding container image in clone config: $CONTAINER_IMAGE"
-  git config "datalad.containers.${CONTAINER_NAME}.image" "$CONTAINER_IMAGE"
+  export FMRIPREP_SIF="$CONTAINER_IMAGE"
 fi
+echo "[INFO] FMRIPREP_SIF=${FMRIPREP_SIF:-<not set, using container config>}"
 
 # CIFTI default resolution is 91k; 170k also supported.
 echo "[INFO] Running fMRIPrep via datalad containers-run"
