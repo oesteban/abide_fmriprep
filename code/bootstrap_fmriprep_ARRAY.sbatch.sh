@@ -48,6 +48,7 @@ SUBJECTS_FILE=""
 FS_LICENSE_FILE=""
 TEMPLATEFLOW_HOME_HOST=""
 CONTAINER_NAME="fmriprep-docker"
+CONTAINER_IMAGE=""
 GIN_REMOTE="gin"
 
 CIFTI_DENSITY="91k"
@@ -80,6 +81,7 @@ Optional:
   --fs-license-file /path/to/license.txt (defaults to FS_LICENSE or <project-root>/env/secrets/fs_license.txt)
   --templateflow-home-host /path/to/templateflow (defaults to <project-root>/inputs/templateflow)
   --container-name <name>  (default: fmriprep-docker; e.g., fmriprep-apptainer)
+  --container-image /path/to/image (defaults to FMRIPREP_SIF env var; overrides .datalad/config image)
   --gin-remote <name>      (default: gin)
   --cifti-density 91k|170k (default: 91k)
   --skip-bids-validation 0|1 (default: 1)
@@ -96,6 +98,7 @@ while [[ $# -gt 0 ]]; do
     --fs-license-file) FS_LICENSE_FILE="$2"; shift 2 ;;
     --templateflow-home-host) TEMPLATEFLOW_HOME_HOST="$2"; shift 2 ;;
     --container-name) CONTAINER_NAME="$2"; shift 2 ;;
+    --container-image) CONTAINER_IMAGE="$2"; shift 2 ;;
     --gin-remote) GIN_REMOTE="$2"; shift 2 ;;
     --cifti-density) CIFTI_DENSITY="$2"; shift 2 ;;
     --skip-bids-validation) SKIP_BIDS_VALIDATION="$2"; shift 2 ;;
@@ -249,12 +252,12 @@ if [[ "$SKIP_BIDS_VALIDATION" == "1" ]]; then
   BIDSVAL_FLAG="--skip-bids-validation"
 fi
 
-# Ensure the container image is available before containers-run
-# (datalad containers-run's internal get may fail on clones; explicit get works)
-CONTAINER_IMAGE="$(git config --file .datalad/config --get "datalad.containers.${CONTAINER_NAME}.image")"
+# Resolve container image: CLI flag > FMRIPREP_SIF env var > .datalad/config
+: "${CONTAINER_IMAGE:=${FMRIPREP_SIF:-}}"
 if [[ -n "$CONTAINER_IMAGE" ]]; then
-  echo "[INFO] Pre-fetching container image: $CONTAINER_IMAGE"
-  datalad get "$CONTAINER_IMAGE"
+  [[ -f "$CONTAINER_IMAGE" ]] || die "Container image not found: $CONTAINER_IMAGE"
+  echo "[INFO] Overriding container image in clone config: $CONTAINER_IMAGE"
+  git config "datalad.containers.${CONTAINER_NAME}.image" "$CONTAINER_IMAGE"
 fi
 
 # CIFTI default resolution is 91k; 170k also supported.
