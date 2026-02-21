@@ -201,7 +201,7 @@ WORKDIR="${JOB_SCRATCH}/work"
 mkdir -p "$WORKDIR"
 
 # Clone from RIA store (annex-capable) when available; fall back to project root.
-DATASET_ID="$(git -C "$PROJECT_ROOT" config --get datalad.dataset.id)"
+DATASET_ID="$(git -C "$PROJECT_ROOT" config --file .datalad/config --get datalad.dataset.id)"
 if [[ -n "$RIA_STORE" ]]; then
   CLONE_URL="${RIA_STORE}#${DATASET_ID}"
   echo "[INFO] Cloning from RIA store: $CLONE_URL"
