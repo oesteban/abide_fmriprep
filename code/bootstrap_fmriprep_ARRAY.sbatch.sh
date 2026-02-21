@@ -274,7 +274,7 @@ datalad containers-run -n "$CONTAINER_NAME" \
     --output-layout "$OUTPUT_LAYOUT" \
     --fs-license-file /fs/license.txt \
     --cifti-output "$CIFTI_DENSITY" \
-    --output-spaces MNI152NLin2009cAsym fsLR \
+    --output-spaces MNI152NLin2009cAsym \
     --nthreads "$NTHREADS" \
     --omp-nthreads "$OMP_NTHREADS" \
     --mem-mb "$MEM_MB" \
