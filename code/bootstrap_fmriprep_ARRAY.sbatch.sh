@@ -48,7 +48,7 @@ SUBJECTS_FILE=""
 FS_LICENSE_FILE=""
 TEMPLATEFLOW_HOME_HOST=""
 CONTAINER_NAME="fmriprep-docker"
-CONTAINER_IMAGE=""
+RIA_STORE=""
 GIN_REMOTE="gin"
 
 CIFTI_DENSITY="91k"
@@ -81,7 +81,7 @@ Optional:
   --fs-license-file /path/to/license.txt (defaults to FS_LICENSE or <project-root>/env/secrets/fs_license.txt)
   --templateflow-home-host /path/to/templateflow (defaults to <project-root>/inputs/templateflow)
   --container-name <name>  (default: fmriprep-docker; e.g., fmriprep-apptainer)
-  --container-image /path/to/image (defaults to FMRIPREP_SIF env var; overrides .datalad/config image)
+  --ria-store <URL>        (RIA store URL for cloning, e.g. ria+file:///path/to/store)
   --gin-remote <name>      (default: gin)
   --cifti-density 91k|170k (default: 91k)
   --skip-bids-validation 0|1 (default: 1)
@@ -98,7 +98,7 @@ while [[ $# -gt 0 ]]; do
     --fs-license-file) FS_LICENSE_FILE="$2"; shift 2 ;;
     --templateflow-home-host) TEMPLATEFLOW_HOME_HOST="$2"; shift 2 ;;
     --container-name) CONTAINER_NAME="$2"; shift 2 ;;
-    --container-image) CONTAINER_IMAGE="$2"; shift 2 ;;
+    --ria-store) RIA_STORE="$2"; shift 2 ;;
     --gin-remote) GIN_REMOTE="$2"; shift 2 ;;
     --cifti-density) CIFTI_DENSITY="$2"; shift 2 ;;
     --skip-bids-validation) SKIP_BIDS_VALIDATION="$2"; shift 2 ;;
@@ -200,8 +200,16 @@ JOB_CLONE="${JOB_SCRATCH}/project"
 WORKDIR="${JOB_SCRATCH}/work"
 mkdir -p "$WORKDIR"
 
-echo "[INFO] Cloning project into scratch: $JOB_CLONE"
-datalad clone "$PROJECT_ROOT" "$JOB_CLONE"
+# Clone from RIA store (annex-capable) when available; fall back to project root.
+DATASET_ID="$(git -C "$PROJECT_ROOT" config --get datalad.dataset.id)"
+if [[ -n "$RIA_STORE" ]]; then
+  CLONE_URL="${RIA_STORE}#${DATASET_ID}"
+  echo "[INFO] Cloning from RIA store: $CLONE_URL"
+  datalad clone "$CLONE_URL" "$JOB_CLONE"
+else
+  echo "[INFO] Cloning project into scratch: $JOB_CLONE"
+  datalad clone "$PROJECT_ROOT" "$JOB_CLONE"
+fi
 
 cd "$JOB_CLONE"
 
@@ -251,14 +259,6 @@ BIDSVAL_FLAG=""
 if [[ "$SKIP_BIDS_VALIDATION" == "1" ]]; then
   BIDSVAL_FLAG="--skip-bids-validation"
 fi
-
-# Resolve container image: CLI flag > FMRIPREP_SIF env var
-: "${CONTAINER_IMAGE:=${FMRIPREP_SIF:-}}"
-if [[ -n "$CONTAINER_IMAGE" ]]; then
-  [[ -f "$CONTAINER_IMAGE" ]] || die "Container image not found: $CONTAINER_IMAGE"
-  export FMRIPREP_SIF="$CONTAINER_IMAGE"
-fi
-echo "[INFO] FMRIPREP_SIF=${FMRIPREP_SIF:-<not set, using container config>}"
 
 # CIFTI default resolution is 91k; 170k also supported.
 echo "[INFO] Running fMRIPrep via datalad containers-run"
