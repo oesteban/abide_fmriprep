@@ -129,6 +129,17 @@ PROC_REL="derivatives/fmriprep-25.2"
 need_cmd datalad
 need_cmd git
 
+# GIT_CONFIG_GLOBAL must point to a NAS-resident gitconfig so that
+# compute nodes (which don't share login-node's ~/.gitconfig) have
+# access to git identity AND datalad credentials for pushing to
+# remotes like GIN. This env var is typically set before sbatch via:
+#   export GIT_CONFIG_GLOBAL=~/nas_home/.gitconfig
+if [[ -z "${GIT_CONFIG_GLOBAL:-}" ]]; then
+  echo "[WARN] GIT_CONFIG_GLOBAL is not set. Compute nodes may lack git identity and credentials."
+elif [[ ! -f "$GIT_CONFIG_GLOBAL" ]]; then
+  echo "[WARN] GIT_CONFIG_GLOBAL=$GIT_CONFIG_GLOBAL does not exist."
+fi
+
 [[ -d "$PROJECT_ROOT" ]] || die "Project root not found: $PROJECT_ROOT"
 git -C "$PROJECT_ROOT" rev-parse --is-inside-work-tree >/dev/null 2>&1 \
   || die "--project-root is not a Git repository: $PROJECT_ROOT (expected YODA superdataset)"
@@ -280,16 +291,32 @@ datalad containers-run -n "$CONTAINER_NAME" \
     --mem-mb "$MEM_MB" \
     -w /work
 
+# -------------------------
+# Push processed results to GIN
+# -------------------------
+# The clone's derivatives subdataset only has origin (RIA/GitHub).
+# Add the GIN remote so we can push results there.
+# Prefer pushurl (HTTPS, works with credential helpers) over url (may be SSH).
+GIN_PUSH_URL="$(git -C "$PROJECT_ROOT/$PROC_REL" config remote."${GIN_REMOTE}".pushurl 2>/dev/null || \
+  git -C "$PROJECT_ROOT/$PROC_REL" config remote."${GIN_REMOTE}".url 2>/dev/null || true)"
+if [[ -z "$GIN_PUSH_URL" ]]; then
+  die "GIN remote '$GIN_REMOTE' not configured in $PROJECT_ROOT/$PROC_REL"
+fi
+echo "[INFO] Adding '$GIN_REMOTE' remote ($GIN_PUSH_URL) to clone's derivatives subdataset"
+git -C "$OUT_DIR_HOST" remote add "$GIN_REMOTE" "$GIN_PUSH_URL"
+
 # Push processed dataset branch to GIN (data + git)
+# Credentials are read from GIT_CONFIG_GLOBAL (NAS-resident ~/.gitconfig)
+# via datalad.credential.gin.{user,secret}
 echo "[INFO] Pushing processed dataset to '$GIN_REMOTE' (branch: $JOB_BRANCH)"
-datalad -d "$OUT_DIR_HOST" push --to "$GIN_REMOTE" --data anything
+datalad push -d "$OUT_DIR_HOST" --to "$GIN_REMOTE" --data anything
 
 # Drop derivatives content in the processed dataset clone (step 5)
 echo "[INFO] Dropping all annexed content from processed clone (post-push)"
-datalad -d "$OUT_DIR_HOST" drop -r .
+datalad drop -d "$OUT_DIR_HOST" -r .
 
 # Drop raw subject in the job clone (step 4)
 echo "[INFO] Dropping raw subject content from job clone"
-datalad -d "$JOB_CLONE" drop -r "$BOTH_SUBDIR_REL" || true
+datalad drop -d "$JOB_CLONE" -r "$BOTH_SUBDIR_REL" || true
 
 echo "[INFO] DONE. Job scratch: $JOB_SCRATCH"
