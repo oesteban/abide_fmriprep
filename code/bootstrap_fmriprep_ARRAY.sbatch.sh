@@ -361,11 +361,7 @@ if [[ "$PUSH_OK" -eq 0 ]]; then
   die "Both RIA and GIN pushes failed. Results exist ONLY in scratch: $JOB_SCRATCH"
 fi
 
-# Drop derivatives content in the processed dataset clone (step 5)
-echo "[INFO] Dropping all annexed content from processed clone (post-push)"
-datalad drop -d "$OUT_DIR_HOST" -r .
-
-# Drop raw subject in the job clone (step 4)
+# Drop raw subject content from the job clone (free annexed inputs before scratch cleanup)
 echo "[INFO] Dropping raw subject content from job clone"
 datalad drop -d "$JOB_CLONE" -r "$BOTH_SUBDIR_REL" || true
 
