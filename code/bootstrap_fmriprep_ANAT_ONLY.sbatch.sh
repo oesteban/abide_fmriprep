@@ -227,6 +227,20 @@ cd "$JOB_CLONE"
 # Install (but don't download) the processed subdataset so we can commit into it
 datalad get -n "$PROC_REL"
 
+# Set up NAS-resident RIA sibling in the clone (safety net for results).
+# The clone's subdataset comes from GitHub which lacks the ria-nas git remote.
+# We read the URL from the project root and add it directly, then fetch
+# the git-annex branch to get the ria-nas-storage special remote config.
+RIA_NAS_URL="$(git -C "$PROJECT_ROOT/$PROC_REL" remote get-url ria-nas 2>/dev/null || true)"
+if [[ -n "$RIA_NAS_URL" ]]; then
+  echo "[INFO] Adding RIA sibling 'ria-nas' ($RIA_NAS_URL) to clone's derivatives subdataset"
+  git -C "$PROC_REL" remote add ria-nas "$RIA_NAS_URL"
+  git -C "$PROC_REL" fetch "$PROJECT_ROOT/$PROC_REL" +git-annex:git-annex 2>/dev/null || true
+  git -C "$PROC_REL" annex enableremote ria-nas-storage 2>/dev/null || true
+else
+  echo "[WARN] RIA sibling not configured in project root (results will only go to GIN)"
+fi
+
 # Ensure merged input subdataset is installed in the clone (metadata only)
 datalad get -n "$BOTH_REL"
 
@@ -285,7 +299,6 @@ datalad containers-run -n "$CONTAINER_NAME" \
     --output-layout "$OUTPUT_LAYOUT" \
     --fs-license-file /fs/license.txt \
     --anat-only \
-     \
     --nthreads "$NTHREADS" \
     --omp-nthreads "$OMP_NTHREADS" \
     --mem-mb "$MEM_MB" \
@@ -305,17 +318,39 @@ fi
 echo "[INFO] Adding '$GIN_REMOTE' remote ($GIN_PUSH_URL) to clone's derivatives subdataset"
 git -C "$OUT_DIR_HOST" remote add "$GIN_REMOTE" "$GIN_PUSH_URL"
 
-# Push processed dataset branch to GIN (data + git)
+# -------------------------
+# Push processed results: RIA (safety net) then GIN (permanent)
+# -------------------------
+PUSH_OK=0
+
+# Stage 1: Push to NAS-resident RIA store (local NFS — fast, no auth)
+if git -C "$OUT_DIR_HOST" remote get-url ria-nas &>/dev/null; then
+  echo "[INFO] Pushing to RIA store (NAS safety net)"
+  if datalad push -d "$OUT_DIR_HOST" --to ria-nas --data anything; then
+    echo "[INFO] RIA push succeeded — results are safe on NAS"
+    PUSH_OK=1
+  else
+    echo "[WARN] RIA push failed"
+  fi
+fi
+
+# Stage 2: Push to GIN (permanent remote storage)
 # Credentials are read from GIT_CONFIG_GLOBAL (NAS-resident ~/.gitconfig)
 # via datalad.credential.gin.{user,secret}
 echo "[INFO] Pushing processed dataset to '$GIN_REMOTE' (branch: $JOB_BRANCH)"
-datalad push -d "$OUT_DIR_HOST" --to "$GIN_REMOTE" --data anything
+if datalad push -d "$OUT_DIR_HOST" --to "$GIN_REMOTE" --data anything; then
+  echo "[INFO] GIN push succeeded"
+  PUSH_OK=1
+else
+  echo "[WARN] GIN push failed"
+fi
 
-# Drop derivatives content in the processed dataset clone (step 5)
-echo "[INFO] Dropping all annexed content from processed clone (post-push)"
-datalad drop -d "$OUT_DIR_HOST" -r .
+# Fail only if BOTH pushes failed
+if [[ "$PUSH_OK" -eq 0 ]]; then
+  die "Both RIA and GIN pushes failed. Results exist ONLY in scratch: $JOB_SCRATCH"
+fi
 
-# Drop raw subject in the job clone (step 4)
+# Drop raw subject content from the job clone (free annexed inputs before scratch cleanup)
 echo "[INFO] Dropping raw subject content from job clone"
 datalad drop -d "$JOB_CLONE" -r "$BOTH_SUBDIR_REL" || true
 
