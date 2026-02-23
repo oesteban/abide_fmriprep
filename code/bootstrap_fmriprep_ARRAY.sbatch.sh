@@ -232,14 +232,17 @@ datalad get -n "$PROC_REL"
 
 # Set up NAS-resident RIA sibling in the clone (safety net for results).
 # The clone's subdataset comes from GitHub which lacks the ria-nas git remote.
-# We read the URL from the project root and add it directly, then fetch
-# the git-annex branch to get the ria-nas-storage special remote config.
+# We reconstruct the full sibling pair: ria-nas (git, annex-ignore) and
+# ria-nas-storage (ORA special remote for annex content), with a
+# publish-depends so `datalad push --to ria-nas` triggers annex copy.
 RIA_NAS_URL="$(git -C "$PROJECT_ROOT/$PROC_REL" remote get-url ria-nas 2>/dev/null || true)"
 if [[ -n "$RIA_NAS_URL" ]]; then
   echo "[INFO] Adding RIA sibling 'ria-nas' ($RIA_NAS_URL) to clone's derivatives subdataset"
   git -C "$PROC_REL" remote add ria-nas "$RIA_NAS_URL"
+  git -C "$PROC_REL" config remote.ria-nas.annex-ignore true
   git -C "$PROC_REL" fetch "$PROJECT_ROOT/$PROC_REL" +git-annex:git-annex 2>/dev/null || true
   git -C "$PROC_REL" annex enableremote ria-nas-storage 2>/dev/null || true
+  git -C "$PROC_REL" config remote.ria-nas.datalad-publish-depends ria-nas-storage
 else
   echo "[WARN] RIA sibling not configured in project root (results will only go to GIN)"
 fi
@@ -316,11 +319,28 @@ datalad containers-run -n "$CONTAINER_NAME" \
     -w /work
 
 # -------------------------
-# Push processed results to GIN
+# Rescue copy: rsync outputs to NAS (plain files, no git-annex dependency)
 # -------------------------
-# The clone's derivatives subdataset only has origin (RIA/GitHub).
-# Add the GIN remote so we can push results there.
-# Prefer pushurl (HTTPS, works with credential helpers) over url (may be SSH).
+# This runs immediately after fMRIPrep so the data survives on NAS even if
+# every subsequent datalad/git-annex step fails.  Uses -L to dereference
+# annex symlinks and copy the actual content.
+RESCUE_DIR="${HOME}/nas_home/fmriprep-rescue/sub-${SUBJECT}"
+echo "[INFO] Rescue rsync to NAS: $RESCUE_DIR"
+mkdir -p "$RESCUE_DIR"
+if rsync -aL --exclude='.git' "$OUT_DIR_HOST/sub-${SUBJECT}/" "$RESCUE_DIR/"; then
+  echo "[INFO] Rescue rsync succeeded ($(du -sh "$RESCUE_DIR" | cut -f1))"
+else
+  echo "[WARN] Rescue rsync failed (non-fatal)"
+fi
+
+# -------------------------
+# Set up GIN remote (branches only — no annex content)
+# -------------------------
+# GIN (gin.g-node.org) runs Gogs and supports git-annex content transfer
+# only over SSH. SSH to gin.g-node.org:22 is blocked from Calypso, so we
+# can only push git branches (symlink pointers) over HTTPS. Actual annex
+# content is stored on the NAS-resident RIA store (pushed above) and can
+# be synced to GIN later from a machine with SSH access.
 GIN_PUSH_URL="$(git -C "$PROJECT_ROOT/$PROC_REL" config remote."${GIN_REMOTE}".pushurl 2>/dev/null || \
   git -C "$PROJECT_ROOT/$PROC_REL" config remote."${GIN_REMOTE}".url 2>/dev/null || true)"
 if [[ -z "$GIN_PUSH_URL" ]]; then
@@ -328,6 +348,7 @@ if [[ -z "$GIN_PUSH_URL" ]]; then
 fi
 echo "[INFO] Adding '$GIN_REMOTE' remote ($GIN_PUSH_URL) to clone's derivatives subdataset"
 git -C "$OUT_DIR_HOST" remote add "$GIN_REMOTE" "$GIN_PUSH_URL"
+git -C "$OUT_DIR_HOST" config remote."${GIN_REMOTE}".annex-ignore true
 
 # -------------------------
 # Push processed results: RIA (safety net) then GIN (permanent)
@@ -340,17 +361,25 @@ if git -C "$OUT_DIR_HOST" remote get-url ria-nas &>/dev/null; then
   if datalad push -d "$OUT_DIR_HOST" --to ria-nas --data anything; then
     echo "[INFO] RIA push succeeded — results are safe on NAS"
     PUSH_OK=1
+
+    # Update the central repo's git-annex branch so `datalad get` can
+    # find content on the RIA store without manual intervention.
+    # The git-annex branch uses union-merge semantics, safe under concurrency.
+    echo "[INFO] Syncing git-annex location tracking to central repo"
+    git -C "$PROJECT_ROOT/$PROC_REL" fetch ria-nas git-annex 2>/dev/null \
+      && git -C "$PROJECT_ROOT/$PROC_REL" annex merge 2>/dev/null \
+      || echo "[WARN] Could not sync git-annex branch to central repo (non-fatal)"
   else
     echo "[WARN] RIA push failed"
   fi
 fi
 
-# Stage 2: Push to GIN (permanent remote storage)
+# Stage 2: Push git branches to GIN (no annex content — SSH blocked)
 # Credentials are read from GIT_CONFIG_GLOBAL (NAS-resident ~/.gitconfig)
 # via datalad.credential.gin.{user,secret}
-echo "[INFO] Pushing processed dataset to '$GIN_REMOTE' (branch: $JOB_BRANCH)"
-if datalad push -d "$OUT_DIR_HOST" --to "$GIN_REMOTE" --data anything; then
-  echo "[INFO] GIN push succeeded"
+echo "[INFO] Pushing branches to '$GIN_REMOTE' (branch: $JOB_BRANCH)"
+if datalad push -d "$OUT_DIR_HOST" --to "$GIN_REMOTE" --data nothing; then
+  echo "[INFO] GIN push succeeded (branches only; annex content is on RIA)"
   PUSH_OK=1
 else
   echo "[WARN] GIN push failed"
