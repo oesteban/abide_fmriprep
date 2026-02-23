@@ -54,6 +54,7 @@ GIN_REMOTE="gin"
 CIFTI_DENSITY="91k"
 OUTPUT_LAYOUT="bids"
 SKIP_BIDS_VALIDATION=1
+ANAT_ONLY=0
 
 usage() {
   cat <<EOF
@@ -85,6 +86,7 @@ Optional:
   --gin-remote <name>      (default: gin)
   --cifti-density 91k|170k (default: 91k)
   --skip-bids-validation 0|1 (default: 1)
+  --anat-only              (run only anatomical processing)
 EOF
 }
 
@@ -102,6 +104,7 @@ while [[ $# -gt 0 ]]; do
     --gin-remote) GIN_REMOTE="$2"; shift 2 ;;
     --cifti-density) CIFTI_DENSITY="$2"; shift 2 ;;
     --skip-bids-validation) SKIP_BIDS_VALIDATION="$2"; shift 2 ;;
+    --anat-only) ANAT_ONLY=1; shift ;;
     -h|--help) usage; exit 0 ;;
     *) die "Unknown arg: $1" ;;
   esac
@@ -227,6 +230,20 @@ cd "$JOB_CLONE"
 # Install (but don't download) the processed subdataset so we can commit into it
 datalad get -n "$PROC_REL"
 
+# Set up NAS-resident RIA sibling in the clone (safety net for results).
+# The clone's subdataset comes from GitHub which lacks the ria-nas git remote.
+# We read the URL from the project root and add it directly, then fetch
+# the git-annex branch to get the ria-nas-storage special remote config.
+RIA_NAS_URL="$(git -C "$PROJECT_ROOT/$PROC_REL" remote get-url ria-nas 2>/dev/null || true)"
+if [[ -n "$RIA_NAS_URL" ]]; then
+  echo "[INFO] Adding RIA sibling 'ria-nas' ($RIA_NAS_URL) to clone's derivatives subdataset"
+  git -C "$PROC_REL" remote add ria-nas "$RIA_NAS_URL"
+  git -C "$PROC_REL" fetch "$PROJECT_ROOT/$PROC_REL" +git-annex:git-annex 2>/dev/null || true
+  git -C "$PROC_REL" annex enableremote ria-nas-storage 2>/dev/null || true
+else
+  echo "[WARN] RIA sibling not configured in project root (results will only go to GIN)"
+fi
+
 # Ensure merged input subdataset is installed in the clone (metadata only)
 datalad get -n "$BOTH_REL"
 
@@ -271,6 +288,12 @@ if [[ "$SKIP_BIDS_VALIDATION" == "1" ]]; then
   BIDSVAL_FLAG="--skip-bids-validation"
 fi
 
+ANAT_ONLY_FLAG=""
+if [[ "$ANAT_ONLY" == "1" ]]; then
+  ANAT_ONLY_FLAG="--anat-only"
+  echo "[INFO] Running in anat-only mode"
+fi
+
 # CIFTI default resolution is 91k; 170k also supported.
 echo "[INFO] Running fMRIPrep via datalad containers-run"
 datalad containers-run -n "$CONTAINER_NAME" \
@@ -282,6 +305,7 @@ datalad containers-run -n "$CONTAINER_NAME" \
   /bids/abide-both /out participant \
     --participant-label "$SUBJECT" \
     $BIDSVAL_FLAG \
+    $ANAT_ONLY_FLAG \
     --output-layout "$OUTPUT_LAYOUT" \
     --fs-license-file /fs/license.txt \
     --cifti-output "$CIFTI_DENSITY" \
@@ -305,11 +329,37 @@ fi
 echo "[INFO] Adding '$GIN_REMOTE' remote ($GIN_PUSH_URL) to clone's derivatives subdataset"
 git -C "$OUT_DIR_HOST" remote add "$GIN_REMOTE" "$GIN_PUSH_URL"
 
-# Push processed dataset branch to GIN (data + git)
+# -------------------------
+# Push processed results: RIA (safety net) then GIN (permanent)
+# -------------------------
+PUSH_OK=0
+
+# Stage 1: Push to NAS-resident RIA store (local NFS — fast, no auth)
+if git -C "$OUT_DIR_HOST" remote get-url ria-nas &>/dev/null; then
+  echo "[INFO] Pushing to RIA store (NAS safety net)"
+  if datalad push -d "$OUT_DIR_HOST" --to ria-nas --data anything; then
+    echo "[INFO] RIA push succeeded — results are safe on NAS"
+    PUSH_OK=1
+  else
+    echo "[WARN] RIA push failed"
+  fi
+fi
+
+# Stage 2: Push to GIN (permanent remote storage)
 # Credentials are read from GIT_CONFIG_GLOBAL (NAS-resident ~/.gitconfig)
 # via datalad.credential.gin.{user,secret}
 echo "[INFO] Pushing processed dataset to '$GIN_REMOTE' (branch: $JOB_BRANCH)"
-datalad push -d "$OUT_DIR_HOST" --to "$GIN_REMOTE" --data anything
+if datalad push -d "$OUT_DIR_HOST" --to "$GIN_REMOTE" --data anything; then
+  echo "[INFO] GIN push succeeded"
+  PUSH_OK=1
+else
+  echo "[WARN] GIN push failed"
+fi
+
+# Fail only if BOTH pushes failed
+if [[ "$PUSH_OK" -eq 0 ]]; then
+  die "Both RIA and GIN pushes failed. Results exist ONLY in scratch: $JOB_SCRATCH"
+fi
 
 # Drop derivatives content in the processed dataset clone (step 5)
 echo "[INFO] Dropping all annexed content from processed clone (post-push)"
