@@ -21,3 +21,6 @@
 [submodule "docs/paper"]
 	path = docs/paper
 	url = git@github.com:oesteban/abide-paper.git
+[submodule "logs"]
+	path = logs
+	url = git@github.com:oesteban/abide-fmriprep-derivatives-logs.git
