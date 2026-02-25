@@ -36,6 +36,12 @@ lookup_participant() {
   ' "$participants_tsv"
 }
 
+list_done_subjects() {
+  local proc_dir="$1"
+  git -C "$proc_dir" ls-tree --name-only master 2>/dev/null \
+    | grep '^sub-' | grep -v '\.html$' || true
+}
+
 # -------------------------
 # Args
 # -------------------------
@@ -175,13 +181,22 @@ if [[ -z "$SUBJECT" ]]; then
     [[ -f "$SUBJECTS_FILE" ]] || die "Subjects file not found: $SUBJECTS_FILE"
     SUBJECT="$(sed -n "${SLURM_ARRAY_TASK_ID}p" "$SUBJECTS_FILE" | tr -d '\r' | xargs)"
     [[ -n "$SUBJECT" ]] || die "No subject found at line ${SLURM_ARRAY_TASK_ID} in $SUBJECTS_FILE"
+    # Skip if already on master
+    _check="sub-${SUBJECT#sub-}"
+    if list_done_subjects "$PROJECT_ROOT/$PROC_REL" | grep -qxF "$_check"; then
+      echo "[INFO] Subject $_check already on master — skipping."
+      exit 0
+    fi
   else
     [[ -n "${SLURM_ARRAY_TASK_ID:-}" ]] || die "SLURM_ARRAY_TASK_ID not set (submit as an array?)"
     mapfile -t SUBJECTS < <(
-      list_subjects_from_participants "$PARTICIPANTS_TSV" "$DATASET" "$SITE" | sort
+      comm -23 \
+        <(list_subjects_from_participants "$PARTICIPANTS_TSV" "$DATASET" "$SITE" | sort) \
+        <(list_done_subjects "$PROJECT_ROOT/$PROC_REL" | sort)
     )
     NUM_SUBJECTS="${#SUBJECTS[@]}"
-    [[ "$NUM_SUBJECTS" -gt 0 ]] || die "No subjects found in participants.tsv for dataset/site filters"
+    echo "[INFO] ${NUM_SUBJECTS} subjects to process (already-done on master excluded)"
+    [[ "$NUM_SUBJECTS" -gt 0 ]] || die "No subjects found in participants.tsv for dataset/site filters (or all already done)"
     IDX=$((SLURM_ARRAY_TASK_ID - 1))
     if [[ "$IDX" -lt 0 || "$IDX" -ge "$NUM_SUBJECTS" ]]; then
       die "SLURM_ARRAY_TASK_ID (${SLURM_ARRAY_TASK_ID}) out of range 1..${NUM_SUBJECTS}"
@@ -193,6 +208,13 @@ fi
 SUBJECT="${SUBJECT#sub-}"
 
 PARTICIPANT_ID="sub-${SUBJECT}"
+
+# Skip if already on master
+if list_done_subjects "$PROJECT_ROOT/$PROC_REL" | grep -qxF "$PARTICIPANT_ID"; then
+  echo "[INFO] Subject $PARTICIPANT_ID already on master — skipping."
+  exit 0
+fi
+
 PARTICIPANT_ROW="$(lookup_participant "$PARTICIPANTS_TSV" "$PARTICIPANT_ID")"
 [[ -n "$PARTICIPANT_ROW" ]] || die "Subject not found in participants.tsv: $PARTICIPANT_ID"
 
