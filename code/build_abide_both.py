@@ -504,13 +504,82 @@ def ensure_t1w_sidecar(
     dest_json.write_text(json.dumps(meta, indent=2, sort_keys=True) + "\n", encoding="utf-8")
 
 
+def read_site_phenotypic(
+    site_dir: Path,
+) -> Dict[str, Tuple[str, str, str, str, str]]:
+    """Read per-site participants.tsv and extract phenotypic columns.
+
+    Returns a dict mapping original subject ID (str, no 'sub-' prefix)
+    to (group, age, sex, handedness, fiq).
+    """
+    tsv_path = site_dir / "participants.tsv"
+    if not tsv_path.exists():
+        return {}
+
+    # Try to read the file content (may be an annex symlink)
+    try:
+        text = tsv_path.read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError):
+        return {}
+
+    lines = text.strip().split("\n")
+    if len(lines) < 2:
+        return {}
+
+    # Case-insensitive header lookup (ABIDE I = UPPERCASE, ABIDE II = lowercase)
+    raw_headers = lines[0].split("\t")
+    headers = [h.strip().lower() for h in raw_headers]
+
+    col_map = {}
+    for target in ("participant_id", "dx_group", "age_at_scan", "sex",
+                    "handedness_category", "fiq"):
+        try:
+            col_map[target] = headers.index(target)
+        except ValueError:
+            return {}  # missing required column
+
+    DX_MAP = {"1": "ASD", "2": "TC"}
+    SEX_MAP = {"1": "M", "2": "F"}
+
+    result = {}
+    for line in lines[1:]:
+        cols = line.split("\t")
+        raw_id = cols[col_map["participant_id"]].strip().replace("sub-", "")
+
+        dx_raw = cols[col_map["dx_group"]].strip()
+        group = DX_MAP.get(dx_raw, "n/a")
+
+        age_raw = cols[col_map["age_at_scan"]].strip()
+        age = age_raw if age_raw not in ("n/a", "-9999", "") else "n/a"
+
+        sex_raw = cols[col_map["sex"]].strip()
+        sex = SEX_MAP.get(sex_raw, "n/a")
+
+        hand = cols[col_map["handedness_category"]].strip()
+        if hand in ("n/a", "-9999", ""):
+            hand = "n/a"
+
+        fiq_raw = cols[col_map["fiq"]].strip()
+        fiq = fiq_raw if fiq_raw not in ("n/a", "-9999", "") else "n/a"
+
+        values = (group, age, sex, hand, fiq)
+        result[raw_id] = values
+        # ABIDE I directory names zero-pad IDs (e.g. sub-0050642) but the TSV
+        # stores the bare numeric ID (50642).  Store under a 7-digit zero-padded
+        # key as well so the lookup in build_abide() hits regardless.
+        if raw_id.isdigit():
+            result[raw_id.zfill(7)] = values
+
+    return result
+
+
 def build_abide(
     project_root: Path,
     out_dir: Path,
     dataset_name: str,
     version_tag: str,
     dry_run: bool,
-    participants: List[Tuple[str, str, str, int, str]],
+    participants: List[Tuple[str, str, str, int, str, str, str, str, str, str]],
     create_sidecars: bool,
     ensure_tr: bool,
     force_drop: bool,
@@ -530,6 +599,7 @@ def build_abide(
 
     for site in sites:
         site_dir = dataset_dir / site
+        pheno = read_site_phenotypic(site_dir)
         subjects = list_subjects(site_dir)
         for subject_dir in subjects:
             orig_id = subject_dir.name[len("sub-"):]
@@ -542,8 +612,10 @@ def build_abide(
                 not sidecar_participant_ids or participant_id in sidecar_participant_ids
             )
 
+            group, age, sex, hand, fiq = pheno.get(orig_id, ("n/a",) * 5)
             participants.append(
-                (participant_id, dataset_name, site, site_index[site], orig_id)
+                (participant_id, dataset_name, site, site_index[site], orig_id,
+                 group, age, sex, hand, fiq)
             )
 
             for src in iter_source_files(subject_dir):
@@ -638,10 +710,13 @@ def clean_subject_tree(out_dir: Path, dry_run: bool) -> None:
 
 def write_participants_tsv(
     out_dir: Path,
-    participants: List[Tuple[str, str, str, int, str]],
+    participants: List[Tuple[str, str, str, int, str, str, str, str, str, str]],
     dry_run: bool,
 ) -> None:
-    header = ["participant_id", "source_dataset", "source_site", "site_index", "source_subject_id"]
+    header = [
+        "participant_id", "source_dataset", "source_site", "site_index",
+        "source_subject_id", "group", "age", "sex", "handedness", "fiq",
+    ]
     rows = sorted(participants, key=lambda r: r[0])
     lines = ["\t".join(header)]
     for row in rows:
@@ -650,6 +725,34 @@ def write_participants_tsv(
     if not dry_run:
         out_dir.mkdir(parents=True, exist_ok=True)
         (out_dir / "participants.tsv").write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
+def write_participants_json(out_dir: Path, dry_run: bool) -> None:
+    """Write a BIDS participants.json sidecar with column descriptions."""
+    data = {
+        "group": {
+            "Description": "Diagnostic group",
+            "Levels": {"ASD": "Autism Spectrum Disorder", "TC": "Typical Control"},
+        },
+        "age": {"Description": "Age at scan in years", "Units": "years"},
+        "sex": {
+            "Description": "Biological sex",
+            "Levels": {"M": "Male", "F": "Female"},
+        },
+        "handedness": {
+            "Description": "Handedness category",
+            "Levels": {
+                "R": "Right", "L": "Left",
+                "Mixed": "Mixed", "Ambi": "Ambidextrous",
+            },
+        },
+        "fiq": {"Description": "Full-scale IQ"},
+    }
+    if not dry_run:
+        out_dir.mkdir(parents=True, exist_ok=True)
+        (out_dir / "participants.json").write_text(
+            json.dumps(data, indent=2) + "\n", encoding="utf-8"
+        )
 
 
 def write_dataset_description(out_dir: Path, dry_run: bool) -> None:
@@ -1042,7 +1145,7 @@ def main() -> None:
     out_dir = project_root / "inputs" / "abide-both"
     datasets = [d.strip() for d in args.datasets.split(",") if d.strip()]
 
-    participants: List[Tuple[str, str, str, int, str]] = []
+    participants: List[Tuple[str, str, str, int, str, str, str, str, str, str]] = []
     total_files = 0
 
     sidecar_participant_ids = None
@@ -1091,6 +1194,7 @@ def main() -> None:
             )
 
         write_participants_tsv(out_dir, participants, args.dry_run)
+        write_participants_json(out_dir, args.dry_run)
         write_dataset_description(out_dir, args.dry_run)
     else:
         if args.clean:
