@@ -9,6 +9,22 @@
 set -euo pipefail
 
 # -------------------------
+# Scratch cleanup (trap on EXIT — runs on success, failure, and signals)
+# -------------------------
+# git-annex locks object directories (dr-xr-xr-x), so chmod before rm.
+JOB_SCRATCH=""
+cleanup() {
+  local rc=$?
+  if [[ -n "$JOB_SCRATCH" && -d "$JOB_SCRATCH" ]]; then
+    echo "[INFO] Cleaning up scratch: $JOB_SCRATCH"
+    chmod -R u+w "$JOB_SCRATCH" 2>/dev/null || true
+    rm -rf "$JOB_SCRATCH"
+  fi
+  exit $rc
+}
+trap cleanup EXIT
+
+# -------------------------
 # Helpers
 # -------------------------
 die() { echo "[FATAL] $*" >&2; exit 2; }
@@ -229,6 +245,8 @@ echo "[INFO] CONTAINER_NAME=$CONTAINER_NAME  GIN_REMOTE=$GIN_REMOTE"
 # -------------------------
 # Job-local clone (concurrency-safe)
 # -------------------------
+# JOB_SCRATCH is initialized empty at the top so the EXIT trap is safe.
+# Assign the real path here; the trap will clean it up when the job ends.
 JOB_SCRATCH="${SLURM_TMPDIR:-/tmp}/${USER}/bootstrap-fmriprep/${SLURM_JOB_ID:-$$}_${SLURM_ARRAY_TASK_ID:-0}"
 mkdir -p "$JOB_SCRATCH"
 
@@ -416,4 +434,5 @@ fi
 echo "[INFO] Dropping raw subject content from job clone"
 datalad drop -d "$JOB_CLONE" -r "$BOTH_SUBDIR_REL" || true
 
-echo "[INFO] DONE. Job scratch: $JOB_SCRATCH"
+echo "[INFO] fMRIPrep finished successfully for sub-${SUBJECT}."
+# EXIT trap will clean up $JOB_SCRATCH automatically.

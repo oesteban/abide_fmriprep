@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-#SBATCH --job-name=bootstrap-fmriprep
+#SBATCH --job-name=bootstrap-fmriprep-anat
 #SBATCH --output=logs/%x_%A_%a.out
 #SBATCH --error=logs/%x_%A_%a.err
 #SBATCH --cpus-per-task=16
@@ -7,6 +7,22 @@
 #SBATCH --time=10:00:00
 
 set -euo pipefail
+
+# -------------------------
+# Scratch cleanup (trap on EXIT — runs on success, failure, and signals)
+# -------------------------
+# git-annex locks object directories (dr-xr-xr-x), so chmod before rm.
+JOB_SCRATCH=""
+cleanup() {
+  local rc=$?
+  if [[ -n "$JOB_SCRATCH" && -d "$JOB_SCRATCH" ]]; then
+    echo "[INFO] Cleaning up scratch: $JOB_SCRATCH"
+    chmod -R u+w "$JOB_SCRATCH" 2>/dev/null || true
+    rm -rf "$JOB_SCRATCH"
+  fi
+  exit $rc
+}
+trap cleanup EXIT
 
 # -------------------------
 # Helpers
@@ -36,6 +52,12 @@ lookup_participant() {
   ' "$participants_tsv"
 }
 
+list_done_subjects() {
+  local proc_dir="$1"
+  git -C "$proc_dir" ls-tree --name-only master 2>/dev/null \
+    | grep '^sub-' | grep -v '\.html$' || true
+}
+
 # -------------------------
 # Args
 # -------------------------
@@ -51,27 +73,29 @@ CONTAINER_NAME="fmriprep-docker"
 RIA_STORE=""
 GIN_REMOTE="gin"
 
-CIFTI_DENSITY="91k"
 OUTPUT_LAYOUT="bids"
 SKIP_BIDS_VALIDATION=1
 
 usage() {
   cat <<EOF
+Anat-only variant of bootstrap_fmriprep_ARRAY.sbatch.sh.
+Runs fMRIPrep with --anat-only (no functional processing, no CIFTI output).
+
 Usage (array, auto-discover subjects from inputs/abide-both):
-  sbatch --array=1-N code/bootstrap_fmriprep_ARRAY.sbatch.sh \\
+  sbatch --array=1-N code/bootstrap_fmriprep_ANAT_ONLY.sbatch.sh \\
     --project-root /path/to/abide-fmriprep-yoda \\
     [--dataset abide1|abide2] \\
     [--site <SITE>]
 
 Usage (array, explicit subjects list):
-  sbatch --array=1-N code/bootstrap_fmriprep_ARRAY.sbatch.sh \\
+  sbatch --array=1-N code/bootstrap_fmriprep_ANAT_ONLY.sbatch.sh \\
     --project-root /path/to/abide-fmriprep-yoda \\
     [--dataset abide1|abide2] \\
     [--site <SITE>] \\
     --subjects-file lists/<file>
 
 Usage (single subject):
-  sbatch code/bootstrap_fmriprep_ARRAY.sbatch.sh \\
+  sbatch code/bootstrap_fmriprep_ANAT_ONLY.sbatch.sh \\
     --project-root /path/to/abide-fmriprep-yoda \\
     [--dataset abide1|abide2] \\
     [--site <SITE>] \\
@@ -83,7 +107,6 @@ Optional:
   --container-name <name>  (default: fmriprep-docker; e.g., fmriprep-apptainer)
   --ria-store <URL>        (RIA store URL for cloning, e.g. ria+file:///path/to/store)
   --gin-remote <name>      (default: gin)
-  --cifti-density 91k|170k (default: 91k)
   --skip-bids-validation 0|1 (default: 1)
 EOF
 }
@@ -100,7 +123,6 @@ while [[ $# -gt 0 ]]; do
     --container-name) CONTAINER_NAME="$2"; shift 2 ;;
     --ria-store) RIA_STORE="$2"; shift 2 ;;
     --gin-remote) GIN_REMOTE="$2"; shift 2 ;;
-    --cifti-density) CIFTI_DENSITY="$2"; shift 2 ;;
     --skip-bids-validation) SKIP_BIDS_VALIDATION="$2"; shift 2 ;;
     -h|--help) usage; exit 0 ;;
     *) die "Unknown arg: $1" ;;
@@ -172,13 +194,22 @@ if [[ -z "$SUBJECT" ]]; then
     [[ -f "$SUBJECTS_FILE" ]] || die "Subjects file not found: $SUBJECTS_FILE"
     SUBJECT="$(sed -n "${SLURM_ARRAY_TASK_ID}p" "$SUBJECTS_FILE" | tr -d '\r' | xargs)"
     [[ -n "$SUBJECT" ]] || die "No subject found at line ${SLURM_ARRAY_TASK_ID} in $SUBJECTS_FILE"
+    # Skip if already on master
+    _check="sub-${SUBJECT#sub-}"
+    if list_done_subjects "$PROJECT_ROOT/$PROC_REL" | grep -qxF "$_check"; then
+      echo "[INFO] Subject $_check already on master — skipping."
+      exit 0
+    fi
   else
     [[ -n "${SLURM_ARRAY_TASK_ID:-}" ]] || die "SLURM_ARRAY_TASK_ID not set (submit as an array?)"
     mapfile -t SUBJECTS < <(
-      list_subjects_from_participants "$PARTICIPANTS_TSV" "$DATASET" "$SITE" | sort
+      comm -23 \
+        <(list_subjects_from_participants "$PARTICIPANTS_TSV" "$DATASET" "$SITE" | sort) \
+        <(list_done_subjects "$PROJECT_ROOT/$PROC_REL" | sort)
     )
     NUM_SUBJECTS="${#SUBJECTS[@]}"
-    [[ "$NUM_SUBJECTS" -gt 0 ]] || die "No subjects found in participants.tsv for dataset/site filters"
+    echo "[INFO] ${NUM_SUBJECTS} subjects to process (already-done on master excluded)"
+    [[ "$NUM_SUBJECTS" -gt 0 ]] || die "No subjects found in participants.tsv for dataset/site filters (or all already done)"
     IDX=$((SLURM_ARRAY_TASK_ID - 1))
     if [[ "$IDX" -lt 0 || "$IDX" -ge "$NUM_SUBJECTS" ]]; then
       die "SLURM_ARRAY_TASK_ID (${SLURM_ARRAY_TASK_ID}) out of range 1..${NUM_SUBJECTS}"
@@ -190,6 +221,13 @@ fi
 SUBJECT="${SUBJECT#sub-}"
 
 PARTICIPANT_ID="sub-${SUBJECT}"
+
+# Skip if already on master
+if list_done_subjects "$PROJECT_ROOT/$PROC_REL" | grep -qxF "$PARTICIPANT_ID"; then
+  echo "[INFO] Subject $PARTICIPANT_ID already on master — skipping."
+  exit 0
+fi
+
 PARTICIPANT_ROW="$(lookup_participant "$PARTICIPANTS_TSV" "$PARTICIPANT_ID")"
 [[ -n "$PARTICIPANT_ROW" ]] || die "Subject not found in participants.tsv: $PARTICIPANT_ID"
 
@@ -200,10 +238,13 @@ echo "[INFO] FILTER_DATASET=${DATASET:-<none>}  FILTER_SITE=${SITE:-<none>}"
 echo "[INFO] SUBJECT=sub-${SUBJECT}  SOURCE_DATASET=$SOURCE_DATASET  SOURCE_SITE=$SOURCE_SITE  SOURCE_SUBJECT=$SOURCE_SUBJECT  SITE_INDEX=$SITE_INDEX"
 echo "[INFO] TEMPLATEFLOW_HOME_HOST=$TEMPLATEFLOW_HOME_HOST"
 echo "[INFO] CONTAINER_NAME=$CONTAINER_NAME  GIN_REMOTE=$GIN_REMOTE"
+echo "[INFO] Running in anat-only mode"
 
 # -------------------------
 # Job-local clone (concurrency-safe)
 # -------------------------
+# JOB_SCRATCH is initialized empty at the top so the EXIT trap is safe.
+# Assign the real path here; the trap will clean it up when the job ends.
 JOB_SCRATCH="${SLURM_TMPDIR:-/tmp}/${USER}/bootstrap-fmriprep/${SLURM_JOB_ID:-$$}_${SLURM_ARRAY_TASK_ID:-0}"
 mkdir -p "$JOB_SCRATCH"
 
@@ -288,8 +329,7 @@ if [[ "$SKIP_BIDS_VALIDATION" == "1" ]]; then
   BIDSVAL_FLAG="--skip-bids-validation"
 fi
 
-# CIFTI default resolution is 91k; 170k also supported.
-echo "[INFO] Running fMRIPrep via datalad containers-run"
+echo "[INFO] Running fMRIPrep (anat-only) via datalad containers-run"
 datalad containers-run -n "$CONTAINER_NAME" \
   --explicit \
   -m "fMRIPrep abide-both ${SOURCE_DATASET} ${SOURCE_SITE} sub-${SUBJECT}" \
@@ -299,9 +339,10 @@ datalad containers-run -n "$CONTAINER_NAME" \
   /bids/abide-both /out participant \
     --participant-label "$SUBJECT" \
     $BIDSVAL_FLAG \
+    --anat-only \
     --output-layout "$OUTPUT_LAYOUT" \
     --fs-license-file /fs/license.txt \
-    --anat-only \
+    --output-spaces MNI152NLin2009cAsym \
     --nthreads "$NTHREADS" \
     --omp-nthreads "$OMP_NTHREADS" \
     --mem-mb "$MEM_MB" \
@@ -383,4 +424,5 @@ fi
 echo "[INFO] Dropping raw subject content from job clone"
 datalad drop -d "$JOB_CLONE" -r "$BOTH_SUBDIR_REL" || true
 
-echo "[INFO] DONE. Job scratch: $JOB_SCRATCH"
+echo "[INFO] fMRIPrep (anat-only) finished successfully for sub-${SUBJECT}."
+# EXIT trap will clean up $JOB_SCRATCH automatically.
