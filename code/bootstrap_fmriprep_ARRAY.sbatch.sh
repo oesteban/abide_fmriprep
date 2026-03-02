@@ -72,6 +72,7 @@ TEMPLATEFLOW_HOME_HOST=""
 CONTAINER_NAME="fmriprep-docker"
 RIA_STORE=""
 GIN_REMOTE="gin"
+GIN_PUSH_DATA="nothing"
 
 CIFTI_DENSITY="91k"
 OUTPUT_LAYOUT="bids"
@@ -106,6 +107,7 @@ Optional:
   --container-name <name>  (default: fmriprep-docker; e.g., fmriprep-apptainer)
   --ria-store <URL>        (RIA store URL for cloning, e.g. ria+file:///path/to/store)
   --gin-remote <name>      (default: gin)
+  --gin-push-data nothing|anything (default: nothing; use anything when SSH to GIN works)
   --cifti-density 91k|170k (default: 91k)
   --skip-bids-validation 0|1 (default: 1)
   --anat-only              (run only anatomical processing)
@@ -124,6 +126,7 @@ while [[ $# -gt 0 ]]; do
     --container-name) CONTAINER_NAME="$2"; shift 2 ;;
     --ria-store) RIA_STORE="$2"; shift 2 ;;
     --gin-remote) GIN_REMOTE="$2"; shift 2 ;;
+    --gin-push-data) GIN_PUSH_DATA="$2"; shift 2 ;;
     --cifti-density) CIFTI_DENSITY="$2"; shift 2 ;;
     --skip-bids-validation) SKIP_BIDS_VALIDATION="$2"; shift 2 ;;
     --anat-only) ANAT_ONLY=1; shift ;;
@@ -388,7 +391,9 @@ if [[ -z "$GIN_PUSH_URL" ]]; then
 fi
 echo "[INFO] Adding '$GIN_REMOTE' remote ($GIN_PUSH_URL) to clone's derivatives subdataset"
 git -C "$OUT_DIR_HOST" remote add "$GIN_REMOTE" "$GIN_PUSH_URL"
-git -C "$OUT_DIR_HOST" config remote."${GIN_REMOTE}".annex-ignore true
+if [[ "$GIN_PUSH_DATA" == "nothing" ]]; then
+  git -C "$OUT_DIR_HOST" config remote."${GIN_REMOTE}".annex-ignore true
+fi
 
 # -------------------------
 # Push processed results: RIA (safety net) then GIN (permanent)
@@ -414,12 +419,13 @@ if git -C "$OUT_DIR_HOST" remote get-url ria-nas &>/dev/null; then
   fi
 fi
 
-# Stage 2: Push git branches to GIN (no annex content — SSH blocked)
-# Credentials are read from GIT_CONFIG_GLOBAL (NAS-resident ~/.gitconfig)
-# via datalad.credential.gin.{user,secret}
-echo "[INFO] Pushing branches to '$GIN_REMOTE' (branch: $JOB_BRANCH)"
-if datalad push -d "$OUT_DIR_HOST" --to "$GIN_REMOTE" --data nothing; then
-  echo "[INFO] GIN push succeeded (branches only; annex content is on RIA)"
+# Stage 2: Push to GIN
+# --gin-push-data controls whether annex content is transferred:
+#   nothing  = branches only (default; SSH to GIN blocked, e.g., Calypso)
+#   anything = branches + annex content (SSH to GIN works, e.g., Curnagl)
+echo "[INFO] Pushing to '$GIN_REMOTE' (branch: $JOB_BRANCH, data: $GIN_PUSH_DATA)"
+if datalad push -d "$OUT_DIR_HOST" --to "$GIN_REMOTE" --data "$GIN_PUSH_DATA"; then
+  echo "[INFO] GIN push succeeded (data=$GIN_PUSH_DATA)"
   PUSH_OK=1
 else
   echo "[WARN] GIN push failed"
