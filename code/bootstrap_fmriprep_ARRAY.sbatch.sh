@@ -250,7 +250,7 @@ echo "[INFO] CONTAINER_NAME=$CONTAINER_NAME  GIN_REMOTE=$GIN_REMOTE"
 # -------------------------
 # JOB_SCRATCH is initialized empty at the top so the EXIT trap is safe.
 # Assign the real path here; the trap will clean it up when the job ends.
-JOB_SCRATCH="${SLURM_TMPDIR:-/tmp}/${USER}/bootstrap-fmriprep/${SLURM_JOB_ID:-$$}_${SLURM_ARRAY_TASK_ID:-0}"
+JOB_SCRATCH="${SLURM_TMPDIR:-${TMPDIR:-/tmp}}/${USER}/bootstrap-fmriprep/${SLURM_JOB_ID:-$$}_${SLURM_ARRAY_TASK_ID:-0}"
 mkdir -p "$JOB_SCRATCH"
 
 JOB_CLONE="${JOB_SCRATCH}/project"
@@ -338,6 +338,20 @@ ANAT_ONLY_FLAG=""
 if [[ "$ANAT_ONLY" == "1" ]]; then
   ANAT_ONLY_FLAG="--anat-only"
   echo "[INFO] Running in anat-only mode"
+fi
+
+# Remove stale fsaverage from cloned derivatives.
+# When a previous job commits fsaverage, .gitattributes puts label files (text)
+# into git and surf files (binary) into annex.  Subsequent clones get real label
+# files but broken annex symlinks for surfaces.  BIDSFreeSurferDir's FS7 marker
+# check (a label file) passes, so it skips the copytree — leaving FreeSurfer
+# unable to read fsaverage/surf/rh.sphere.reg.  Removing the directory forces a
+# fresh copytree from the container's $FREESURFER_HOME/subjects/fsaverage.
+FSAVG_DIR="$OUT_DIR_HOST/sourcedata/freesurfer/fsaverage"
+if [[ -d "$FSAVG_DIR" ]]; then
+  echo "[INFO] Removing stale fsaverage from cloned derivatives (forces fresh copytree)"
+  chmod -R u+w "$FSAVG_DIR" 2>/dev/null || true
+  rm -rf "$FSAVG_DIR"
 fi
 
 # CIFTI default resolution is 91k; 170k also supported.
