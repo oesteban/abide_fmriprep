@@ -72,7 +72,7 @@ TEMPLATEFLOW_HOME_HOST=""
 CONTAINER_NAME="fmriprep-docker"
 RIA_STORE=""
 GIN_REMOTE="gin"
-GIN_PUSH_DATA="nothing"
+GIN_PUSH_DATA="anything"
 
 CIFTI_DENSITY="91k"
 OUTPUT_LAYOUT="bids"
@@ -107,7 +107,7 @@ Optional:
   --container-name <name>  (default: fmriprep-docker; e.g., fmriprep-apptainer)
   --ria-store <URL>        (RIA store URL for cloning, e.g. ria+file:///path/to/store)
   --gin-remote <name>      (default: gin)
-  --gin-push-data nothing|anything (default: nothing; use anything when SSH to GIN works)
+  --gin-push-data nothing|anything (default: anything)
   --cifti-density 91k|170k (default: 91k)
   --skip-bids-validation 0|1 (default: 1)
   --anat-only              (run only anatomical processing)
@@ -391,13 +391,12 @@ else
 fi
 
 # -------------------------
-# Set up GIN remote (branches only — no annex content)
+# Set up GIN remote
 # -------------------------
 # GIN (gin.g-node.org) runs Gogs and supports git-annex content transfer
-# only over SSH. SSH to gin.g-node.org:22 is blocked from Calypso, so we
-# can only push git branches (symlink pointers) over HTTPS. Actual annex
-# content is stored on the NAS-resident RIA store (pushed above) and can
-# be synced to GIN later from a machine with SSH access.
+# over SSH. When --gin-push-data=anything (default), both branches and annex
+# content are pushed; when nothing, only branches are pushed (annex content
+# stays on the RIA store and can be synced to GIN later).
 GIN_PUSH_URL="$(git -C "$PROJECT_ROOT/$PROC_REL" config remote."${GIN_REMOTE}".pushurl 2>/dev/null || \
   git -C "$PROJECT_ROOT/$PROC_REL" config remote."${GIN_REMOTE}".url 2>/dev/null || true)"
 if [[ -z "$GIN_PUSH_URL" ]]; then
@@ -435,8 +434,8 @@ fi
 
 # Stage 2: Push to GIN
 # --gin-push-data controls whether annex content is transferred:
-#   nothing  = branches only (default; SSH to GIN blocked, e.g., Calypso)
-#   anything = branches + annex content (SSH to GIN works, e.g., Curnagl)
+#   anything = branches + annex content (default)
+#   nothing  = branches only (annex content stays on RIA store)
 echo "[INFO] Pushing to '$GIN_REMOTE' (branch: $JOB_BRANCH, data: $GIN_PUSH_DATA)"
 if datalad push -d "$OUT_DIR_HOST" --to "$GIN_REMOTE" --data "$GIN_PUSH_DATA"; then
   echo "[INFO] GIN push succeeded (data=$GIN_PUSH_DATA)"

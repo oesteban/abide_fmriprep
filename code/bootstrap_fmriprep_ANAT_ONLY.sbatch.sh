@@ -72,6 +72,7 @@ TEMPLATEFLOW_HOME_HOST=""
 CONTAINER_NAME="fmriprep-docker"
 RIA_STORE=""
 GIN_REMOTE="gin"
+GIN_PUSH_DATA="anything"
 
 OUTPUT_LAYOUT="bids"
 SKIP_BIDS_VALIDATION=1
@@ -107,6 +108,7 @@ Optional:
   --container-name <name>  (default: fmriprep-docker; e.g., fmriprep-apptainer)
   --ria-store <URL>        (RIA store URL for cloning, e.g. ria+file:///path/to/store)
   --gin-remote <name>      (default: gin)
+  --gin-push-data nothing|anything (default: anything)
   --skip-bids-validation 0|1 (default: 1)
 EOF
 }
@@ -123,6 +125,7 @@ while [[ $# -gt 0 ]]; do
     --container-name) CONTAINER_NAME="$2"; shift 2 ;;
     --ria-store) RIA_STORE="$2"; shift 2 ;;
     --gin-remote) GIN_REMOTE="$2"; shift 2 ;;
+    --gin-push-data) GIN_PUSH_DATA="$2"; shift 2 ;;
     --skip-bids-validation) SKIP_BIDS_VALIDATION="$2"; shift 2 ;;
     -h|--help) usage; exit 0 ;;
     *) die "Unknown arg: $1" ;;
@@ -245,7 +248,7 @@ echo "[INFO] Running in anat-only mode"
 # -------------------------
 # JOB_SCRATCH is initialized empty at the top so the EXIT trap is safe.
 # Assign the real path here; the trap will clean it up when the job ends.
-JOB_SCRATCH="${SLURM_TMPDIR:-/tmp}/${USER}/bootstrap-fmriprep/${SLURM_JOB_ID:-$$}_${SLURM_ARRAY_TASK_ID:-0}"
+JOB_SCRATCH="${SLURM_TMPDIR:-${TMPDIR:-/tmp}}/${USER}/bootstrap-fmriprep/${SLURM_JOB_ID:-$$}_${SLURM_ARRAY_TASK_ID:-0}"
 mkdir -p "$JOB_SCRATCH"
 
 JOB_CLONE="${JOB_SCRATCH}/project"
@@ -364,13 +367,12 @@ else
 fi
 
 # -------------------------
-# Set up GIN remote (branches only — no annex content)
+# Set up GIN remote
 # -------------------------
 # GIN (gin.g-node.org) runs Gogs and supports git-annex content transfer
-# only over SSH. SSH to gin.g-node.org:22 is blocked from Calypso, so we
-# can only push git branches (symlink pointers) over HTTPS. Actual annex
-# content is stored on the NAS-resident RIA store (pushed above) and can
-# be synced to GIN later from a machine with SSH access.
+# over SSH. When --gin-push-data=anything (default), both branches and annex
+# content are pushed; when nothing, only branches are pushed (annex content
+# stays on the RIA store and can be synced to GIN later).
 GIN_PUSH_URL="$(git -C "$PROJECT_ROOT/$PROC_REL" config remote."${GIN_REMOTE}".pushurl 2>/dev/null || \
   git -C "$PROJECT_ROOT/$PROC_REL" config remote."${GIN_REMOTE}".url 2>/dev/null || true)"
 if [[ -z "$GIN_PUSH_URL" ]]; then
@@ -378,7 +380,9 @@ if [[ -z "$GIN_PUSH_URL" ]]; then
 fi
 echo "[INFO] Adding '$GIN_REMOTE' remote ($GIN_PUSH_URL) to clone's derivatives subdataset"
 git -C "$OUT_DIR_HOST" remote add "$GIN_REMOTE" "$GIN_PUSH_URL"
-git -C "$OUT_DIR_HOST" config remote."${GIN_REMOTE}".annex-ignore true
+if [[ "$GIN_PUSH_DATA" == "nothing" ]]; then
+  git -C "$OUT_DIR_HOST" config remote."${GIN_REMOTE}".annex-ignore true
+fi
 
 # -------------------------
 # Push processed results: RIA (safety net) then GIN (permanent)
@@ -404,12 +408,13 @@ if git -C "$OUT_DIR_HOST" remote get-url ria-nas &>/dev/null; then
   fi
 fi
 
-# Stage 2: Push git branches to GIN (no annex content — SSH blocked)
-# Credentials are read from GIT_CONFIG_GLOBAL (NAS-resident ~/.gitconfig)
-# via datalad.credential.gin.{user,secret}
-echo "[INFO] Pushing branches to '$GIN_REMOTE' (branch: $JOB_BRANCH)"
-if datalad push -d "$OUT_DIR_HOST" --to "$GIN_REMOTE" --data nothing; then
-  echo "[INFO] GIN push succeeded (branches only; annex content is on RIA)"
+# Stage 2: Push to GIN
+# --gin-push-data controls whether annex content is transferred:
+#   anything = branches + annex content (default)
+#   nothing  = branches only (annex content stays on RIA store)
+echo "[INFO] Pushing to '$GIN_REMOTE' (branch: $JOB_BRANCH, data: $GIN_PUSH_DATA)"
+if datalad push -d "$OUT_DIR_HOST" --to "$GIN_REMOTE" --data "$GIN_PUSH_DATA"; then
+  echo "[INFO] GIN push succeeded (data=$GIN_PUSH_DATA)"
   PUSH_OK=1
 else
   echo "[WARN] GIN push failed"
