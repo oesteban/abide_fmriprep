@@ -154,16 +154,10 @@ PROC_REL="derivatives/fmriprep-25.2"
 need_cmd datalad
 need_cmd git
 
-# GIT_CONFIG_GLOBAL must point to a NAS-resident gitconfig so that
-# compute nodes (which don't share login-node's ~/.gitconfig) have
-# access to git identity AND datalad credentials for pushing to
-# remotes like GIN. This env var is typically set before sbatch via:
-#   export GIT_CONFIG_GLOBAL=~/nas_home/.gitconfig
-if [[ -z "${GIT_CONFIG_GLOBAL:-}" ]]; then
-  echo "[WARN] GIT_CONFIG_GLOBAL is not set. Compute nodes may lack git identity and credentials."
-elif [[ ! -f "$GIT_CONFIG_GLOBAL" ]]; then
-  echo "[WARN] GIT_CONFIG_GLOBAL=$GIT_CONFIG_GLOBAL does not exist."
-fi
+# On Curnagl, /users/ is GPFS-shared across all nodes, so ~/.gitconfig
+# is available on compute nodes without GIT_CONFIG_GLOBAL.
+# Do NOT set GIT_CONFIG_GLOBAL — it overrides the default ~/.gitconfig
+# lookup and causes failures when pointed at a nonexistent path.
 
 [[ -d "$PROJECT_ROOT" ]] || die "Project root not found: $PROJECT_ROOT"
 git -C "$PROJECT_ROOT" rev-parse --is-inside-work-tree >/dev/null 2>&1 \
@@ -352,21 +346,6 @@ datalad containers-run -n "$CONTAINER_NAME" \
     -w /work
 
 # -------------------------
-# Rescue copy: rsync outputs to NAS (plain files, no git-annex dependency)
-# -------------------------
-# This runs immediately after fMRIPrep so the data survives on NAS even if
-# every subsequent datalad/git-annex step fails.  Uses -L to dereference
-# annex symlinks and copy the actual content.
-RESCUE_DIR="${HOME}/nas_home/fmriprep-rescue/sub-${SUBJECT}"
-echo "[INFO] Rescue rsync to NAS: $RESCUE_DIR"
-mkdir -p "$RESCUE_DIR"
-if rsync -aL --exclude='.git' "$OUT_DIR_HOST/sub-${SUBJECT}/" "$RESCUE_DIR/"; then
-  echo "[INFO] Rescue rsync succeeded ($(du -sh "$RESCUE_DIR" | cut -f1))"
-else
-  echo "[WARN] Rescue rsync failed (non-fatal)"
-fi
-
-# -------------------------
 # Set up GIN remote
 # -------------------------
 # GIN (gin.g-node.org) runs Gogs and supports git-annex content transfer
@@ -417,7 +396,18 @@ if datalad push -d "$OUT_DIR_HOST" --to "$GIN_REMOTE" --data "$GIN_PUSH_DATA"; t
   echo "[INFO] GIN push succeeded (data=$GIN_PUSH_DATA)"
   PUSH_OK=1
 else
-  echo "[WARN] GIN push failed"
+  # The job branch + annex content usually succeed; the git-annex tracking
+  # branch is rejected when another job pushed it first (race condition).
+  # Fetch, merge (union semantics), and retry once.
+  echo "[WARN] GIN push failed — retrying after git-annex branch sync"
+  git -C "$OUT_DIR_HOST" fetch "$GIN_REMOTE" git-annex 2>/dev/null || true
+  git -C "$OUT_DIR_HOST" annex merge 2>/dev/null || true
+  if datalad push -d "$OUT_DIR_HOST" --to "$GIN_REMOTE" --data "$GIN_PUSH_DATA"; then
+    echo "[INFO] GIN push succeeded on retry"
+    PUSH_OK=1
+  else
+    echo "[WARN] GIN push failed on retry"
+  fi
 fi
 
 # Fail only if BOTH pushes failed

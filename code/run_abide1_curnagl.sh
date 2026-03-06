@@ -121,7 +121,7 @@ phase_B() {
   info "Ready to submit 10-subject test batch."
   info "Command:"
   echo ""
-  echo "  export GIT_CONFIG_GLOBAL=~/nas_home/.gitconfig"
+  echo "  # No GIT_CONFIG_GLOBAL needed — Curnagl /users/ is GPFS-shared"
   echo ""
   echo "  sbatch --array=1-10 code/bootstrap_fmriprep_ARRAY.sbatch.sh \\"
   echo "    --project-root $PROJECT_ROOT \\"
@@ -131,7 +131,7 @@ phase_B() {
   read -rp "Submit now? [y/N] " yn
   case "$yn" in
     [Yy]*)
-      export GIT_CONFIG_GLOBAL=~/nas_home/.gitconfig
+      # No GIT_CONFIG_GLOBAL needed — Curnagl /users/ is GPFS-shared
       sbatch --array=1-10 code/bootstrap_fmriprep_ARRAY.sbatch.sh \
         --project-root "$PROJECT_ROOT" \
         --container-name "$CONTAINER_NAME" \
@@ -168,7 +168,7 @@ phase_C() {
 
   if [[ $remaining_count -le 1000 ]]; then
     echo ""
-    echo "  export GIT_CONFIG_GLOBAL=~/nas_home/.gitconfig"
+    echo "  # No GIT_CONFIG_GLOBAL needed — Curnagl /users/ is GPFS-shared"
     echo ""
     echo "  sbatch --array=${start_idx}-${remaining_count} code/bootstrap_fmriprep_ARRAY.sbatch.sh \\"
     echo "    --project-root $PROJECT_ROOT \\"
@@ -197,7 +197,7 @@ phase_C() {
   read -rp "Submit now? [y/N] " yn
   case "$yn" in
     [Yy]*)
-      export GIT_CONFIG_GLOBAL=~/nas_home/.gitconfig
+      # No GIT_CONFIG_GLOBAL needed — Curnagl /users/ is GPFS-shared
       if [[ $remaining_count -le 1000 ]]; then
         sbatch --array=${start_idx}-${remaining_count} \
           code/bootstrap_fmriprep_ARRAY.sbatch.sh \
