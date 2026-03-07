@@ -25,6 +25,20 @@ cleanup() {
 trap cleanup EXIT
 
 # -------------------------
+# Early environment setup (must run before any datalad/git-annex/singularity commands)
+# -------------------------
+_early_cluster="${SLURM_CLUSTER_NAME:-unknown}"
+case "$_early_cluster" in
+  curnagl)
+    export PATH="/work/FAC/FBM/DNF/oesteban/hcph/opt/mamba/envs/fmriprep/bin:$PATH"
+    module load gcc/12.3.0 singularityce/4.1.0 2>/dev/null || true
+    ;;
+  calypso)
+    module load singularity 2>/dev/null || true
+    ;;
+esac
+
+# -------------------------
 # Helpers
 # -------------------------
 die() { echo "[FATAL] $*" >&2; exit 2; }
