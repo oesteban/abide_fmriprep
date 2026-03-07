@@ -278,12 +278,14 @@ info "participants.tsv: $tsv_count subject(s)."
 # -------------------------
 merge_ok=0
 merge_fail=0
+NEWLY_MERGED=()
 
 for ref in ${UNMERGED[@]+"${UNMERGED[@]}"}; do
   info "Merging $ref ..."
 
   if git merge --no-edit "$ref" 2>/dev/null; then
     success "Merged $ref"
+    NEWLY_MERGED+=("$ref")
     (( merge_ok++ )) || true
     continue
   fi
@@ -304,6 +306,7 @@ for ref in ${UNMERGED[@]+"${UNMERGED[@]}"}; do
     git add logs/CITATION.md logs/CITATION.html logs/CITATION.tex
     git commit --no-edit
     success "Merged $ref (CITATION conflict resolved — kept master)"
+    NEWLY_MERGED+=("$ref")
     (( merge_ok++ )) || true
   else
     fail "Merge conflict in non-CITATION files for $ref — aborting merge"
@@ -383,6 +386,65 @@ else
 fi
 
 # -------------------------
+# Phase 5 — Delete merged branches from all remotes
+# -------------------------
+TO_DELETE=()
+TO_DELETE+=("${MERGED[@]}")
+TO_DELETE+=(${NEWLY_MERGED[@]+"${NEWLY_MERGED[@]}"})
+deleted_total=0
+
+if [[ ${#TO_DELETE[@]} -gt 0 ]]; then
+  info "Cleaning up ${#TO_DELETE[@]} merged branch(es) from remotes..."
+
+  # Extract branch names (strip leading remote prefix)
+  BRANCH_NAMES=()
+  for ref in "${TO_DELETE[@]}"; do
+    BRANCH_NAMES+=("${ref#*/}")
+  done
+
+  # Process each remote
+  while IFS= read -r remote; do
+    # Fetch refs from remotes we haven't fetched yet
+    if [[ "$remote" != "$REMOTE" ]]; then
+      git fetch "$remote" 2>/dev/null || { warn "Cannot fetch '$remote' — skipping"; continue; }
+    fi
+
+    # Identify which branches exist on this remote
+    delete_refspecs=()
+    for bn in "${BRANCH_NAMES[@]}"; do
+      if git show-ref --verify --quiet "refs/remotes/${remote}/${bn}" 2>/dev/null; then
+        delete_refspecs+=(":refs/heads/${bn}")
+      fi
+    done
+
+    if [[ ${#delete_refspecs[@]} -gt 0 ]]; then
+      info "Deleting ${#delete_refspecs[@]} branch(es) from '$remote'..."
+      if git push "$remote" "${delete_refspecs[@]}"; then
+        success "Deleted ${#delete_refspecs[@]} branch(es) from '$remote'"
+        (( deleted_total += ${#delete_refspecs[@]} )) || true
+      else
+        warn "Some branch deletions from '$remote' failed"
+      fi
+    fi
+  done < <(git remote)
+
+  # Prune stale remote-tracking refs
+  while IFS= read -r remote; do
+    git remote prune "$remote" 2>/dev/null || true
+  done < <(git remote)
+fi
+
+# -------------------------
+# Phase 6 — Sync to origin (GitHub)
+# -------------------------
+info "Pushing to origin (GitHub)..."
+if datalad push --to origin; then
+  success "GitHub synced."
+else
+  warn "datalad push --to origin failed — sync manually."
+fi
+
+# -------------------------
 # Summary
 # -------------------------
 echo ""
@@ -391,5 +453,8 @@ success "Merged:  $merge_ok"
 warn "Already merged: ${#MERGED[@]}"
 if [[ $merge_fail -gt 0 ]]; then
   fail "Failed:  $merge_fail"
+fi
+if [[ $deleted_total -gt 0 ]]; then
+  success "Deleted: $deleted_total branch(es) from remotes"
 fi
 info "participants.tsv: $tsv_count subject(s)"
