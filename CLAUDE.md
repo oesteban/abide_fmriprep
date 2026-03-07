@@ -19,7 +19,7 @@ abide_preproc/                     # YODA superdataset root
 │   └── templateflow/              # Submodule → templateflow/templateflow
 ├── code/                          # All scripts (run from repo root with relative paths)
 │   ├── build_abide_both.py        # Main build script (1124 lines, stdlib-only Python)
-│   ├── bootstrap_fmriprep_ARRAY.sbatch.sh  # SLURM array job (310 lines)
+│   ├── fmriprep-jobarray.sbatch  # SLURM array job (310 lines)
 │   ├── one-test-subject.sh        # Local Docker smoke test [run/first-local branch only]
 │   ├── calypso/                   # HPC utilities [run/first-local branch only]
 │   │   ├── README.md              # Calypso first-run checklist
@@ -94,14 +94,14 @@ SUBJECT=v1s0x0050642 bash code/one-test-subject.sh
 
 **HPC batch submission (SLURM):**
 ```bash
-sbatch --array=1-N code/bootstrap_fmriprep_ARRAY.sbatch.sh \
+sbatch --array=1-N code/fmriprep-jobarray.sbatch \
   --project-root /path/to/abide_fmriprep \
   --container-name fmriprep-apptainer
 ```
 
 **SLURM with site/dataset filtering:**
 ```bash
-sbatch --array=1-N code/bootstrap_fmriprep_ARRAY.sbatch.sh \
+sbatch --array=1-N code/fmriprep-jobarray.sbatch \
   --project-root /path/to/abide_fmriprep \
   --container-name fmriprep-apptainer \
   --dataset abide1 --site NYU

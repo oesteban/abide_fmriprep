@@ -79,7 +79,7 @@ SKIP_BIDS_VALIDATION=1
 
 usage() {
   cat <<EOF
-Anat-only variant of bootstrap_fmriprep_ARRAY.sbatch.sh.
+Anat-only variant of fmriprep-jobarray.sbatch.
 Runs fMRIPrep with --anat-only (no functional processing, no CIFTI output).
 
 Usage (array, auto-discover subjects from inputs/abide-both):

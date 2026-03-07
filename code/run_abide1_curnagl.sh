@@ -123,7 +123,7 @@ phase_B() {
   echo ""
   echo "  # No GIT_CONFIG_GLOBAL needed — Curnagl /users/ is GPFS-shared"
   echo ""
-  echo "  sbatch --array=1-10 code/bootstrap_fmriprep_ARRAY.sbatch.sh \\"
+  echo "  sbatch --array=1-10 code/fmriprep-jobarray.sbatch \\"
   echo "    --project-root $PROJECT_ROOT \\"
   echo "    --container-name $CONTAINER_NAME \\"
   echo "    --dataset $DATASET"
@@ -132,7 +132,7 @@ phase_B() {
   case "$yn" in
     [Yy]*)
       # No GIT_CONFIG_GLOBAL needed — Curnagl /users/ is GPFS-shared
-      sbatch --array=1-10 code/bootstrap_fmriprep_ARRAY.sbatch.sh \
+      sbatch --array=1-10 code/fmriprep-jobarray.sbatch \
         --project-root "$PROJECT_ROOT" \
         --container-name "$CONTAINER_NAME" \
         --dataset "$DATASET"
@@ -170,7 +170,7 @@ phase_C() {
     echo ""
     echo "  # No GIT_CONFIG_GLOBAL needed — Curnagl /users/ is GPFS-shared"
     echo ""
-    echo "  sbatch --array=${start_idx}-${remaining_count} code/bootstrap_fmriprep_ARRAY.sbatch.sh \\"
+    echo "  sbatch --array=${start_idx}-${remaining_count} code/fmriprep-jobarray.sbatch \\"
     echo "    --project-root $PROJECT_ROOT \\"
     echo "    --container-name $CONTAINER_NAME \\"
     echo "    --dataset $DATASET"
@@ -184,7 +184,7 @@ phase_C() {
       [[ $chunk_end -gt $remaining_count ]] && chunk_end=$remaining_count
 
       echo ""
-      echo "  sbatch --array=${chunk_start}-${chunk_end} code/bootstrap_fmriprep_ARRAY.sbatch.sh \\"
+      echo "  sbatch --array=${chunk_start}-${chunk_end} code/fmriprep-jobarray.sbatch \\"
       echo "    --project-root $PROJECT_ROOT \\"
       echo "    --container-name $CONTAINER_NAME \\"
       echo "    --dataset $DATASET"
@@ -200,7 +200,7 @@ phase_C() {
       # No GIT_CONFIG_GLOBAL needed — Curnagl /users/ is GPFS-shared
       if [[ $remaining_count -le 1000 ]]; then
         sbatch --array=${start_idx}-${remaining_count} \
-          code/bootstrap_fmriprep_ARRAY.sbatch.sh \
+          code/fmriprep-jobarray.sbatch \
           --project-root "$PROJECT_ROOT" \
           --container-name "$CONTAINER_NAME" \
           --dataset "$DATASET"
@@ -211,7 +211,7 @@ phase_C() {
           chunk_end=$(( chunk_start + 999 ))
           [[ $chunk_end -gt $remaining_count ]] && chunk_end=$remaining_count
           sbatch --array=${chunk_start}-${chunk_end} \
-            code/bootstrap_fmriprep_ARRAY.sbatch.sh \
+            code/fmriprep-jobarray.sbatch \
             --project-root "$PROJECT_ROOT" \
             --container-name "$CONTAINER_NAME" \
             --dataset "$DATASET"

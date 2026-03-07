@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 #SBATCH --job-name=fmriprep
-#SBATCH --output=$SCRATCH/abide_fmriprep/logs/%x_%A_%a.out
-#SBATCH --error=$SCRATCH/abide_fmriprep/logs/%x_%A_%a.err
+#SBATCH --output=${JOB_LOG_DIR}/%x_%A_%a.out
+#SBATCH --error=${JOB_LOG_DIR}/%x_%A_%a.err
 #SBATCH --cpus-per-task=16
 #SBATCH --mem=64G
 #SBATCH --time=10:00:00
@@ -82,20 +82,20 @@ ANAT_ONLY=0
 usage() {
   cat <<EOF
 Usage (array, auto-discover subjects from inputs/abide-both):
-  sbatch --array=1-N code/bootstrap_fmriprep_ARRAY.sbatch.sh \\
+  sbatch --array=1-N code/fmriprep-jobarray.sbatch \\
     --project-root /path/to/abide-fmriprep-yoda \\
     [--dataset abide1|abide2] \\
     [--site <SITE>]
 
 Usage (array, explicit subjects list):
-  sbatch --array=1-N code/bootstrap_fmriprep_ARRAY.sbatch.sh \\
+  sbatch --array=1-N code/fmriprep-jobarray.sbatch \\
     --project-root /path/to/abide-fmriprep-yoda \\
     [--dataset abide1|abide2] \\
     [--site <SITE>] \\
     --subjects-file lists/<file>
 
 Usage (single subject):
-  sbatch code/bootstrap_fmriprep_ARRAY.sbatch.sh \\
+  sbatch code/fmriprep-jobarray.sbatch \\
     --project-root /path/to/abide-fmriprep-yoda \\
     [--dataset abide1|abide2] \\
     [--site <SITE>] \\

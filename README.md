@@ -306,7 +306,7 @@ tail -n +2 inputs/abide-both/participants.tsv | wc -l
 Filtered example:
 
 ```bash
-sbatch --array=1-N code/bootstrap_fmriprep_ARRAY.sbatch.sh \
+sbatch --array=1-N code/fmriprep-jobarray.sbatch \
   --project-root /path/to/abide_fmriprep \
   --dataset abide1 \
   --site CMU_a \
@@ -316,7 +316,7 @@ sbatch --array=1-N code/bootstrap_fmriprep_ARRAY.sbatch.sh \
 Unfiltered run across all subjects (no dataset/site filters):
 
 ```bash
-sbatch --array=1-2194 code/bootstrap_fmriprep_ARRAY.sbatch.sh \
+sbatch --array=1-2194 code/fmriprep-jobarray.sbatch \
   --project-root /path/to/abide_fmriprep \
   --container-name fmriprep-apptainer
 ```
@@ -324,7 +324,7 @@ sbatch --array=1-2194 code/bootstrap_fmriprep_ARRAY.sbatch.sh \
 Explicit subjects list:
 
 ```bash
-sbatch --array=1-N code/bootstrap_fmriprep_ARRAY.sbatch.sh \
+sbatch --array=1-N code/fmriprep-jobarray.sbatch \
   --project-root /path/to/abide_fmriprep \
   --dataset abide2 \
   --site BNI_1 \
