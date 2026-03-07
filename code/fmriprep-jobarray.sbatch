@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
-#SBATCH --job-name=bootstrap-fmriprep
-#SBATCH --output=/scratch/oesteban/abide_fmriprep/logs/%x_%A_%a.out
-#SBATCH --error=/scratch/oesteban/abide_fmriprep/logs/%x_%A_%a.err
+#SBATCH --job-name=fmriprep
+#SBATCH --output=$SCRATCH/abide_fmriprep/logs/%x_%A_%a.out
+#SBATCH --error=$SCRATCH/abide_fmriprep/logs/%x_%A_%a.err
 #SBATCH --cpus-per-task=16
 #SBATCH --mem=64G
 #SBATCH --time=10:00:00
