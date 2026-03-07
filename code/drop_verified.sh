@@ -79,7 +79,7 @@ else
   SUBJECTS=()
   while IFS= read -r d; do
     SUBJECTS+=("$d")
-  done < <(git ls-tree --name-only master | grep '^sub-')
+  done < <(git ls-tree --name-only master | grep '^sub-' | grep -v '\.html$')
 fi
 
 if [[ ${#SUBJECTS[@]} -eq 0 ]]; then
