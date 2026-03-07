@@ -58,6 +58,16 @@ list_done_subjects() {
     | grep '^sub-' | grep -v '\.html$' || true
 }
 
+detect_cluster() {
+  local fqdn
+  fqdn="$(hostname -f 2>/dev/null || hostname)"
+  case "$fqdn" in
+    *.dcsr.unil.ch) echo "curnagl" ;;
+    calypso*)        echo "calypso" ;;
+    *)               echo "unknown" ;;
+  esac
+}
+
 # -------------------------
 # Args
 # -------------------------
@@ -157,10 +167,24 @@ PROC_REL="derivatives/fmriprep-25.2"
 need_cmd datalad
 need_cmd git
 
-# On Curnagl, /users/ is GPFS-shared across all nodes, so ~/.gitconfig
-# is available on compute nodes without GIT_CONFIG_GLOBAL.
-# Do NOT set GIT_CONFIG_GLOBAL — it overrides the default ~/.gitconfig
-# lookup and causes failures when pointed at a nonexistent path.
+[[ -n "${JOB_LOG_DIR:-}" ]] || die "\$JOB_LOG_DIR must be set before sbatch submission.
+  Curnagl:  export JOB_LOG_DIR=\$SCRATCH/abide_fmriprep/logs
+  Calypso:  export JOB_LOG_DIR=\$HOME/nas_home/abide_fmriprep/logs"
+
+CLUSTER="$(detect_cluster)"
+echo "[INFO] Cluster: $CLUSTER"
+
+case "$CLUSTER" in
+  curnagl)  ;; # /users/ is GPFS-shared — ~/.gitconfig visible everywhere
+  calypso)  export GIT_CONFIG_GLOBAL="$HOME/nas_home/.gitconfig" ;;
+  *)        echo "[WARN] Unknown cluster — no cluster-specific setup applied" ;;
+esac
+
+# Warn if --ria-store was passed on Curnagl (no RIA store available)
+if [[ "$CLUSTER" == "curnagl" && -n "$RIA_STORE" ]]; then
+  echo "[WARN] --ria-store ignored on Curnagl (GIN-only push)"
+  RIA_STORE=""
+fi
 
 [[ -d "$PROJECT_ROOT" ]] || die "Project root not found: $PROJECT_ROOT"
 git -C "$PROJECT_ROOT" rev-parse --is-inside-work-tree >/dev/null 2>&1 \
@@ -268,24 +292,31 @@ cd "$JOB_CLONE"
 datalad get -n "$PROC_REL"
 
 # Set up NAS-resident RIA sibling in the clone (safety net for results).
-# The clone's subdataset comes from GitHub which lacks the ria-nas git remote.
-# We reconstruct the full sibling pair: ria-nas (git, annex-ignore) and
-# ria-nas-storage (ORA special remote for annex content), with a
-# publish-depends so `datalad push --to ria-nas` triggers annex copy.
-RIA_NAS_URL="$(git -C "$PROJECT_ROOT/$PROC_REL" remote get-url ria-nas 2>/dev/null || true)"
-if [[ -n "$RIA_NAS_URL" ]]; then
-  echo "[INFO] Adding RIA sibling 'ria-nas' ($RIA_NAS_URL) to clone's derivatives subdataset"
-  git -C "$PROC_REL" remote add ria-nas "$RIA_NAS_URL"
-  git -C "$PROC_REL" config remote.ria-nas.annex-ignore true
-  git -C "$PROC_REL" fetch "$PROJECT_ROOT/$PROC_REL" +git-annex:git-annex 2>/dev/null || true
-  git -C "$PROC_REL" annex enableremote ria-nas-storage 2>/dev/null || true
-  git -C "$PROC_REL" config remote.ria-nas.datalad-publish-depends ria-nas-storage
+# Only needed on Calypso — Curnagl uses GIN-only push.
+if [[ "$CLUSTER" != "curnagl" ]]; then
+  RIA_NAS_URL="$(git -C "$PROJECT_ROOT/$PROC_REL" remote get-url ria-nas 2>/dev/null || true)"
+  if [[ -n "$RIA_NAS_URL" ]]; then
+    echo "[INFO] Adding RIA sibling 'ria-nas' ($RIA_NAS_URL) to clone's derivatives subdataset"
+    git -C "$PROC_REL" remote add ria-nas "$RIA_NAS_URL"
+    git -C "$PROC_REL" config remote.ria-nas.annex-ignore true
+    git -C "$PROC_REL" fetch "$PROJECT_ROOT/$PROC_REL" +git-annex:git-annex 2>/dev/null || true
+    git -C "$PROC_REL" annex enableremote ria-nas-storage 2>/dev/null || true
+    git -C "$PROC_REL" config remote.ria-nas.datalad-publish-depends ria-nas-storage
+  else
+    echo "[WARN] RIA sibling not configured in project root (results will only go to GIN)"
+  fi
 else
-  echo "[WARN] RIA sibling not configured in project root (results will only go to GIN)"
+  echo "[INFO] Curnagl: skipping RIA sibling (GIN-only push)"
 fi
 
 # Ensure merged input subdataset is installed in the clone (metadata only)
 datalad get -n "$BOTH_REL"
+
+# Fetch pre-computed PyBIDS database index (local copy from PROJECT_ROOT).
+# Must be pre-fetched once on the persistent project root:
+#   datalad get -d inputs/abide-both inputs/abide-both/.bids-layout-db/layout_index.sqlite
+datalad get "$BOTH_REL/.bids-layout-db/layout_index.sqlite"
+echo "[INFO] PyBIDS database index available at $BOTH_REL/.bids-layout-db"
 
 # Get the one subject (recursively) in the merged dataset.
 # inputs/abide-both is a self-contained git-annex dataset (no cross-dataset symlinks),
@@ -349,6 +380,8 @@ if [[ -d "$FSAVG_DIR" ]]; then
 fi
 
 # CIFTI default resolution is 91k; 170k also supported.
+FMRIPREP_START_ISO="$(date '+%Y-%m-%dT%H:%M:%S')"
+echo "[INFO] fmriprep_start=$FMRIPREP_START_ISO"
 echo "[INFO] Running fMRIPrep via datalad containers-run"
 datalad containers-run -n "$CONTAINER_NAME" \
   --explicit \
@@ -364,10 +397,14 @@ datalad containers-run -n "$CONTAINER_NAME" \
     --fs-license-file /fs/license.txt \
     --cifti-output "$CIFTI_DENSITY" \
     --output-spaces MNI152NLin2009cAsym \
+    --bids-database-dir /bids/abide-both/.bids-layout-db \
     --nthreads "$NTHREADS" \
     --omp-nthreads "$OMP_NTHREADS" \
     --mem-mb "$MEM_MB" \
     -w /work
+
+FMRIPREP_STOP_ISO="$(date '+%Y-%m-%dT%H:%M:%S')"
+echo "[INFO] fmriprep_stop=$FMRIPREP_STOP_ISO"
 
 # -------------------------
 # Set up GIN remote
@@ -388,56 +425,196 @@ if [[ "$GIN_PUSH_DATA" == "nothing" ]]; then
 fi
 
 # -------------------------
-# Push processed results: RIA (safety net) then GIN (permanent)
+# Push processed results (cluster-aware)
 # -------------------------
-PUSH_OK=0
+push_to_gin_with_backoff() {
+  local max_attempts=7
+  local delay=15
+  local attempt
 
-# Stage 1: Push to NAS-resident RIA store (local NFS — fast, no auth)
-if git -C "$OUT_DIR_HOST" remote get-url ria-nas &>/dev/null; then
-  echo "[INFO] Pushing to RIA store (NAS safety net)"
-  if datalad push -d "$OUT_DIR_HOST" --to ria-nas --data anything; then
-    echo "[INFO] RIA push succeeded — results are safe on NAS"
-    PUSH_OK=1
+  for (( attempt=1; attempt<=max_attempts; attempt++ )); do
+    echo "[INFO] GIN push attempt $attempt/$max_attempts (branch: $JOB_BRANCH, data: $GIN_PUSH_DATA)"
+    if datalad push -d "$OUT_DIR_HOST" --to "$GIN_REMOTE" --data "$GIN_PUSH_DATA"; then
+      echo "[INFO] GIN push succeeded on attempt $attempt"
+      return 0
+    fi
 
-    # Update the central repo's git-annex branch so `datalad get` can
-    # find content on the RIA store without manual intervention.
-    # The git-annex branch uses union-merge semantics, safe under concurrency.
-    echo "[INFO] Syncing git-annex location tracking to central repo"
-    git -C "$PROJECT_ROOT/$PROC_REL" fetch ria-nas git-annex 2>/dev/null \
-      && git -C "$PROJECT_ROOT/$PROC_REL" annex merge 2>/dev/null \
-      || echo "[WARN] Could not sync git-annex branch to central repo (non-fatal)"
-  else
-    echo "[WARN] RIA push failed"
-  fi
-fi
+    if (( attempt < max_attempts )); then
+      echo "[WARN] GIN push failed — fetching git-annex branch and retrying in ${delay}s"
+      git -C "$OUT_DIR_HOST" fetch "$GIN_REMOTE" git-annex 2>/dev/null || true
+      git -C "$OUT_DIR_HOST" annex merge 2>/dev/null || true
+      sleep "$delay"
+      delay=$(( delay * 2 ))
+    fi
+  done
 
-# Stage 2: Push to GIN
-# --gin-push-data controls whether annex content is transferred:
-#   anything = branches + annex content (default)
-#   nothing  = branches only (annex content stays on RIA store)
-echo "[INFO] Pushing to '$GIN_REMOTE' (branch: $JOB_BRANCH, data: $GIN_PUSH_DATA)"
-if datalad push -d "$OUT_DIR_HOST" --to "$GIN_REMOTE" --data "$GIN_PUSH_DATA"; then
-  echo "[INFO] GIN push succeeded (data=$GIN_PUSH_DATA)"
-  PUSH_OK=1
-else
-  # The job branch + annex content usually succeed; the git-annex tracking
-  # branch is rejected when another job pushed it first (race condition).
-  # Fetch, merge (union semantics), and retry once.
-  echo "[WARN] GIN push failed — retrying after git-annex branch sync"
-  git -C "$OUT_DIR_HOST" fetch "$GIN_REMOTE" git-annex 2>/dev/null || true
-  git -C "$OUT_DIR_HOST" annex merge 2>/dev/null || true
-  if datalad push -d "$OUT_DIR_HOST" --to "$GIN_REMOTE" --data "$GIN_PUSH_DATA"; then
-    echo "[INFO] GIN push succeeded on retry"
-    PUSH_OK=1
-  else
-    echo "[WARN] GIN push failed on retry"
-  fi
-fi
+  # All attempts exhausted — rescue working repo to persistent storage
+  local rescue_dir="${SCRATCH:-/tmp}/abide-rescue/${SLURM_ARRAY_JOB_ID:-${SLURM_JOB_ID:-0}}_${SLURM_ARRAY_TASK_ID:-0}"
+  echo "[FATAL] All $max_attempts GIN push attempts failed — rescuing to $rescue_dir"
+  mkdir -p "$rescue_dir"
+  rsync -a "$OUT_DIR_HOST/" "$rescue_dir/"
+  die "GIN push failed after $max_attempts attempts. Rescued repo: $rescue_dir"
+}
 
-# Fail only if BOTH pushes failed
-if [[ "$PUSH_OK" -eq 0 ]]; then
-  die "Both RIA and GIN pushes failed. Results exist ONLY in scratch: $JOB_SCRATCH"
-fi
+# Convert fmriprep.toml dir name (YYYYMMDD-HHMMSS) to ISO 8601
+toml_dir_to_iso() {
+  echo "$1" | sed 's/\([0-9]\{4\}\)\([0-9]\{2\}\)\([0-9]\{2\}\)-\([0-9]\{2\}\)\([0-9]\{2\}\)\([0-9]\{2\}\)/\1-\2-\3T\4:\5:\6/'
+}
+
+# Convert nipype timestamp (YYMMDD-HH:MM:SS) to ISO 8601
+nipype_ts_to_iso() {
+  echo "$1" | sed 's/^\([0-9]\{2\}\)\([0-9]\{2\}\)\([0-9]\{2\}\)-/20\1-\2-\3T/'
+}
+
+merge_into_master() {
+  # Inline merge of job branch into master in the central repo (Curnagl only).
+  # All steps non-fatal — merge_job_branches.sh handles cleanup later.
+  (
+    flock -w 120 9 || { echo "[WARN] Could not acquire merge lock within 120s — skipping inline merge"; exit 0; }
+
+    cd "$PROJECT_ROOT/$PROC_REL" || { echo "[WARN] Cannot cd to derivatives — skipping merge"; exit 0; }
+
+    # Fetch the job branch from GIN
+    git fetch "$GIN_REMOTE" "$JOB_BRANCH" 2>/dev/null \
+      || { echo "[WARN] Could not fetch $JOB_BRANCH from $GIN_REMOTE — skipping merge"; exit 0; }
+
+    # Ensure we are on master
+    git checkout master 2>/dev/null \
+      || { echo "[WARN] Cannot checkout master — skipping merge"; exit 0; }
+
+    # Attempt merge
+    if ! git merge --no-edit FETCH_HEAD 2>/dev/null; then
+      # Check if only CITATION files conflict
+      conflicted="$(git diff --name-only --diff-filter=U)"
+      only_citation=1
+      while IFS= read -r cfile; do
+        case "$cfile" in
+          logs/CITATION.md|logs/CITATION.html|logs/CITATION.tex) ;;
+          *) only_citation=0; break ;;
+        esac
+      done <<< "$conflicted"
+
+      if [[ $only_citation -eq 1 && -n "$conflicted" ]]; then
+        git checkout master -- logs/CITATION.md logs/CITATION.html logs/CITATION.tex 2>/dev/null || true
+        git add logs/CITATION.md logs/CITATION.html logs/CITATION.tex
+        git commit --no-edit
+        echo "[INFO] Merged $JOB_BRANCH (CITATION conflict resolved — kept master)"
+      else
+        echo "[WARN] Merge conflict in non-CITATION files for $JOB_BRANCH — aborting"
+        git merge --abort
+        exit 0
+      fi
+    else
+      echo "[INFO] Merged $JOB_BRANCH into master"
+    fi
+
+    # --- Extract metadata for participants.tsv ---
+
+    # stc_ref_time from logs/CITATION.md
+    stc_val="$(sed -n 's/.*slice-time corrected to \([0-9.]*\)s.*/\1/p' logs/CITATION.md 2>/dev/null | head -1)" || true
+
+    # fmriprep_start: prefer fmriprep.toml dir name on the branch
+    fmriprep_start=""
+    start_raw="$(git ls-tree -r --name-only FETCH_HEAD -- "${PARTICIPANT_ID}/" 2>/dev/null \
+      | sed -n 's|.*/log/\([0-9]\{8\}-[0-9]\{6\}\)_.*/fmriprep\.toml|\1|p' \
+      | head -1)" || true
+    if [[ -n "$start_raw" ]]; then
+      fmriprep_start="$(toml_dir_to_iso "$start_raw")"
+    fi
+    : "${fmriprep_start:=${FMRIPREP_START_ISO:-n/a}}"
+
+    # fmriprep_stop: prefer nipype timestamp from SLURM log
+    fmriprep_stop=""
+    _logfile="${JOB_LOG_DIR}/fmriprep_${SLURM_ARRAY_JOB_ID:-${SLURM_JOB_ID:-0}}_${SLURM_ARRAY_TASK_ID:-0}.out"
+    if [[ -f "$_logfile" ]]; then
+      stop_raw="$(grep -B1 'fMRIPrep finished successfully' "$_logfile" \
+        | sed -n 's/^\([0-9]\{6\}-[0-9:]*\).*/\1/p' | head -1)" || true
+      if [[ -n "$stop_raw" ]]; then
+        fmriprep_stop="$(nipype_ts_to_iso "$stop_raw")"
+      fi
+    fi
+    : "${fmriprep_stop:=${FMRIPREP_STOP_ISO:-n/a}}"
+
+    # --- Upsert subject row in participants.tsv ---
+    tsv="participants.tsv"
+    stc_display="${stc_val:-n/a}"
+
+    if [[ ! -f "$tsv" ]]; then
+      printf 'participant_id\tstc_ref_time\tfmriprep_start\tfmriprep_stop\n' > "$tsv"
+    fi
+
+    {
+      awk -F'\t' -v pid="$PARTICIPANT_ID" 'NR==1{next} $1!=pid{print}' "$tsv"
+      printf '%s\t%s\t%s\t%s\n' "$PARTICIPANT_ID" "$stc_display" "$fmriprep_start" "$fmriprep_stop"
+    } | sort -t$'\t' -k1,1 > "${tsv}.body"
+
+    {
+      printf 'participant_id\tstc_ref_time\tfmriprep_start\tfmriprep_stop\n'
+      cat "${tsv}.body"
+    } > "$tsv"
+    rm -f "${tsv}.body"
+
+    git add participants.tsv
+    if ! git diff --cached --quiet -- participants.tsv; then
+      git commit -m "enh: update participants.tsv for $PARTICIPANT_ID"
+      echo "[INFO] Updated participants.tsv for $PARTICIPANT_ID"
+    fi
+
+    # Push master to GIN (single attempt)
+    if git push "$GIN_REMOTE" master 2>/dev/null; then
+      echo "[INFO] Pushed master to $GIN_REMOTE"
+    else
+      echo "[WARN] Could not push master to $GIN_REMOTE — next merge will pick it up"
+    fi
+
+  ) 9>"$PROJECT_ROOT/$PROC_REL/.merge.lock"
+}
+
+case "$CLUSTER" in
+  curnagl)
+    push_to_gin_with_backoff
+    merge_into_master || echo "[WARN] Inline merge failed (non-fatal)"
+    ;;
+  *)
+    # Calypso: RIA push (safety net) then GIN push (single retry)
+    PUSH_OK=0
+
+    if git -C "$OUT_DIR_HOST" remote get-url ria-nas &>/dev/null; then
+      echo "[INFO] Pushing to RIA store (NAS safety net)"
+      if datalad push -d "$OUT_DIR_HOST" --to ria-nas --data anything; then
+        echo "[INFO] RIA push succeeded — results are safe on NAS"
+        PUSH_OK=1
+
+        echo "[INFO] Syncing git-annex location tracking to central repo"
+        git -C "$PROJECT_ROOT/$PROC_REL" fetch ria-nas git-annex 2>/dev/null \
+          && git -C "$PROJECT_ROOT/$PROC_REL" annex merge 2>/dev/null \
+          || echo "[WARN] Could not sync git-annex branch to central repo (non-fatal)"
+      else
+        echo "[WARN] RIA push failed"
+      fi
+    fi
+
+    echo "[INFO] Pushing to '$GIN_REMOTE' (branch: $JOB_BRANCH, data: $GIN_PUSH_DATA)"
+    if datalad push -d "$OUT_DIR_HOST" --to "$GIN_REMOTE" --data "$GIN_PUSH_DATA"; then
+      echo "[INFO] GIN push succeeded (data=$GIN_PUSH_DATA)"
+      PUSH_OK=1
+    else
+      echo "[WARN] GIN push failed — retrying after git-annex branch sync"
+      git -C "$OUT_DIR_HOST" fetch "$GIN_REMOTE" git-annex 2>/dev/null || true
+      git -C "$OUT_DIR_HOST" annex merge 2>/dev/null || true
+      if datalad push -d "$OUT_DIR_HOST" --to "$GIN_REMOTE" --data "$GIN_PUSH_DATA"; then
+        echo "[INFO] GIN push succeeded on retry"
+        PUSH_OK=1
+      else
+        echo "[WARN] GIN push failed on retry"
+      fi
+    fi
+
+    if [[ "$PUSH_OK" -eq 0 ]]; then
+      die "Both RIA and GIN pushes failed. Results exist ONLY in scratch: $JOB_SCRATCH"
+    fi
+    ;;
+esac
 
 # Drop raw subject content from the job clone (free annexed inputs before scratch cleanup)
 echo "[INFO] Dropping raw subject content from job clone"
