@@ -330,6 +330,13 @@ fi
 # Ensure merged input subdataset is installed in the clone (metadata only)
 datalad get -n "$BOTH_REL"
 
+# Disable stale Calypso RIA siblings inherited from dataset config.
+# They cause harmless but noisy "[INFO] RIA store unavailable" messages.
+# On Calypso, re-enable manually once in the persistent project root.
+for _ds in . "$PROC_REL" "$BOTH_REL"; do
+  git -C "$_ds" annex dead calypso-ria-storage 2>/dev/null || true
+done
+
 # Fetch pre-computed PyBIDS database index (local copy from PROJECT_ROOT).
 # Must be pre-fetched once on the persistent project root:
 #   datalad get -d inputs/abide-both inputs/abide-both/.bids-layout-db/layout_index.sqlite
