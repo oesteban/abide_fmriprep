@@ -131,7 +131,7 @@ if [[ -n "$LOGS_DIR" ]]; then
     if [[ -n "$sub" ]]; then
       printf '%s\t%s\n' "$sub" "$logfile" >> "$LOG_INDEX"
     fi
-  done < <(grep -l 'fMRIPrep finished successfully' "$LOGS_DIR"/bootstrap-fmriprep_*.out 2>/dev/null)
+  done < <(grep -l 'fMRIPrep finished successfully' "$LOGS_DIR"/fmriprep_*.out 2>/dev/null)
 
   log_index_count="$(wc -l < "$LOG_INDEX" | tr -d ' ')"
   info "Indexed $log_index_count successful log(s)."
