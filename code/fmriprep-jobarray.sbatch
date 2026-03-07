@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 #SBATCH --job-name=fmriprep
-#SBATCH --output=${JOB_LOG_DIR}/%x_%A_%a.out
-#SBATCH --error=${JOB_LOG_DIR}/%x_%A_%a.err
+#SBATCH --output=logs/%x_%A_%a.out
+#SBATCH --error=logs/%x_%A_%a.err
 #SBATCH --cpus-per-task=16
 #SBATCH --mem=64G
 #SBATCH --time=10:00:00
@@ -172,9 +172,8 @@ PROC_REL="derivatives/fmriprep-25.2"
 need_cmd datalad
 need_cmd git
 
-[[ -n "${JOB_LOG_DIR:-}" ]] || die "\$JOB_LOG_DIR must be set before sbatch submission.
-  Curnagl:  export JOB_LOG_DIR=\$SCRATCH/abide_fmriprep/logs
-  Calypso:  export JOB_LOG_DIR=\$HOME/nas_home/abide_fmriprep/logs"
+JOB_LOG_DIR="${PROJECT_ROOT}/logs"
+mkdir -p "$JOB_LOG_DIR"
 
 CLUSTER="$(detect_cluster)"
 echo "[INFO] Cluster: $CLUSTER"
