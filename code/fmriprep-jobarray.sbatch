@@ -59,12 +59,17 @@ list_done_subjects() {
 }
 
 detect_cluster() {
+  # SLURM_CLUSTER_NAME is the most reliable source inside a SLURM job.
+  if [[ -n "${SLURM_CLUSTER_NAME:-}" ]]; then
+    echo "$SLURM_CLUSTER_NAME"
+    return
+  fi
   local fqdn
   fqdn="$(hostname -f 2>/dev/null || hostname)"
   case "$fqdn" in
-    *.dcsr.unil.ch) echo "curnagl" ;;
-    calypso*)        echo "calypso" ;;
-    *)               echo "unknown" ;;
+    *.dcsr.unil.ch|curnagl|dna*) echo "curnagl" ;;
+    calypso*)                     echo "calypso" ;;
+    *)                            echo "unknown" ;;
   esac
 }
 
