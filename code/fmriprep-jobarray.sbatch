@@ -82,10 +82,10 @@ list_done_subjects() {
     git -C "$site_dir" ls-tree --name-only master 2>/dev/null \
       | grep '^sub-' | grep -v '\.html$' || true
   done
-  # Legacy: old monolithic derivatives/fmriprep-25.2
-  if [[ -d "$deriv_dir/fmriprep-25.2" ]] \
-     && [[ -d "$deriv_dir/fmriprep-25.2/.git" || -f "$deriv_dir/fmriprep-25.2/.git" ]]; then
-    git -C "$deriv_dir/fmriprep-25.2" ls-tree --name-only master 2>/dev/null \
+  # Legacy: old monolithic derivatives/_legacy-fmriprep-25.2
+  if [[ -d "$deriv_dir/_legacy-fmriprep-25.2" ]] \
+     && [[ -d "$deriv_dir/_legacy-fmriprep-25.2/.git" || -f "$deriv_dir/_legacy-fmriprep-25.2/.git" ]]; then
+    git -C "$deriv_dir/_legacy-fmriprep-25.2" ls-tree --name-only master 2>/dev/null \
       | grep '^sub-' | grep -v '\.html$' || true
   fi
 }

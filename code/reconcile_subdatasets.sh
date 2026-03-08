@@ -1,17 +1,16 @@
 #!/usr/bin/env bash
 #
-# reconcile_subdatasets.sh — register new per-subject GIN repos as subdatasets
+# reconcile_subdatasets.sh — octopus-merge job branches in site-level datasets
 #
-# After a batch of SLURM jobs completes, this script discovers new GIN repos
-# in the abide-fmriprep organization, installs them as DataLad subdatasets in
-# the derivatives parent, updates participants.tsv, and pushes the parent.
-#
-# Replaces the old merge_job_branches.sh workflow (branch-per-job merging).
+# After a batch of SLURM jobs completes, each site dataset has one or more
+# job/<sub-XXX> branches on GIN. This script fetches those branches,
+# octopus-merges them into master (with sequential fallback for CITATION
+# conflicts), updates participants.tsv per site, and optionally pushes.
 #
 # Usage:
-#   code/reconcile_subdatasets.sh [--dry-run] [-C <derivatives-path>]
-#                                 [--logs-dir <path>] [--gin-org <org>]
-#                                 [--push]
+#   code/reconcile_subdatasets.sh [-C <superdataset-root>] [--site <prefix>]
+#                                 [--dry-run] [--push] [--no-delete-branches]
+#                                 [--remote <name>] [--logs-dir <path>]
 
 set -euo pipefail
 
@@ -25,249 +24,89 @@ success() { echo -e "\033[32m[OK]\033[0m $*"; }
 warn()    { echo -e "\033[33m[SKIP]\033[0m $*"; }
 fail()    { echo -e "\033[31m[FAIL]\033[0m $*"; }
 
-# -------------------------
-# Args
-# -------------------------
-DRY_RUN=0
-DERIV_PATH=""
-LOGS_DIR=""
-GIN_ORG="abide-fmriprep"
-DO_PUSH=0
-
-usage() {
-  cat <<EOF
-Usage:
-  reconcile_subdatasets.sh [--dry-run] [-C <derivatives-path>]
-                           [--logs-dir <path>] [--gin-org <org>]
-                           [--push]
-
-Options:
-  --dry-run         List repos and actions without making changes
-  -C <path>         Path to the derivatives subdataset (default: current directory)
-  --logs-dir <path> Path to the SLURM logs directory (default: auto-detect)
-  --gin-org <org>   GIN organization name (default: abide-fmriprep)
-  --push            Push parent datasets to GIN and GitHub after reconciliation
-  -h, --help        Show this help
-EOF
+# Convert nipype timestamp (YYMMDD-HH:MM:SS) to ISO 8601 (YYYY-MM-DDTHH:MM:SS)
+nipype_ts_to_iso() {
+  echo "$1" | sed 's/^\([0-9]\{2\}\)\([0-9]\{2\}\)\([0-9]\{2\}\)-/20\1-\2-\3T/'
 }
 
-while [[ $# -gt 0 ]]; do
-  case "$1" in
-    --dry-run) DRY_RUN=1; shift ;;
-    -C) DERIV_PATH="$2"; shift 2 ;;
-    --logs-dir) LOGS_DIR="$2"; shift 2 ;;
-    --gin-org) GIN_ORG="$2"; shift 2 ;;
-    --push) DO_PUSH=1; shift ;;
-    -h|--help) usage; exit 0 ;;
-    *) die "Unknown arg: $1" ;;
-  esac
-done
-
-if [[ -n "$DERIV_PATH" ]]; then
-  cd "$DERIV_PATH"
-fi
-
-# Verify we are inside a git repo and on master
-[[ -d .git || -f .git ]] || die "Not a git repository: $(pwd)"
-CURRENT_BRANCH="$(git symbolic-ref --short HEAD 2>/dev/null)" \
-  || die "Cannot determine current branch (detached HEAD?)"
-[[ "$CURRENT_BRANCH" == "master" ]] || die "Must be on master (currently on $CURRENT_BRANCH)"
-
-DERIV_ABS="$(pwd)"
-FS_REL="sourcedata/freesurfer"
-FS_ABS="$DERIV_ABS/$FS_REL"
-
-# Auto-detect the SLURM logs directory from the YODA superdataset
-if [[ -z "$LOGS_DIR" ]]; then
-  _candidate="$(cd .. && git rev-parse --show-toplevel 2>/dev/null)" || true
-  if [[ -n "$_candidate" && -d "${_candidate}/logs" ]]; then
-    LOGS_DIR="${_candidate}/logs"
-  fi
-fi
-
-if [[ -n "$LOGS_DIR" && -d "$LOGS_DIR" ]]; then
-  info "SLURM logs directory: $LOGS_DIR"
-else
-  warn "SLURM logs directory not found"
-  LOGS_DIR=""
-fi
-
-# -------------------------
-# Phase 1 — Discover GIN repos in the organization
-# -------------------------
-info "Discovering repos in GIN organization '$GIN_ORG'..."
-
-# List all repos via SSH (git ls-remote on the org, or use the GIN API).
-# GIN runs Gogs, so we can use its API: GET /api/v1/orgs/:org/repos
-GIN_API="https://gin.g-node.org/api/v1"
-
-# Fetch all repo names (paginated)
-ALL_GIN_REPOS=()
-page=1
-while true; do
-  response="$(curl -s "${GIN_API}/orgs/${GIN_ORG}/repos?page=${page}&limit=50" 2>/dev/null)" || break
-  # Extract repo names (simple JSON parsing with grep/sed, no jq dependency)
-  page_repos=()
-  while IFS= read -r name; do
-    page_repos+=("$name")
-  done < <(echo "$response" | grep -o '"name":"[^"]*"' | sed 's/"name":"//;s/"//')
-
-  if [[ ${#page_repos[@]} -eq 0 ]]; then
-    break
-  fi
-  ALL_GIN_REPOS+=("${page_repos[@]}")
-  (( page++ ))
-done
-
-info "Found ${#ALL_GIN_REPOS[@]} repos in '$GIN_ORG'."
-
-# Separate fmriprep and freesurfer repos
-FMRIPREP_REPOS=()
-FREESURFER_REPOS=()
-for repo in "${ALL_GIN_REPOS[@]}"; do
-  case "$repo" in
-    fmriprep-*) FMRIPREP_REPOS+=("$repo") ;;
-    freesurfer-*) FREESURFER_REPOS+=("$repo") ;;
-  esac
-done
-
-info "fMRIPrep repos: ${#FMRIPREP_REPOS[@]}, FreeSurfer repos: ${#FREESURFER_REPOS[@]}"
-
-# -------------------------
-# Phase 2 — Identify repos not yet registered as subdatasets
-# -------------------------
-
-# Get existing fMRIPrep subdatasets from .gitmodules
-existing_fmriprep=()
-while IFS= read -r submod; do
-  [[ -n "$submod" ]] && existing_fmriprep+=("$submod")
-done < <(git config -f .gitmodules --get-regexp 'submodule\.sub-.*\.path' 2>/dev/null \
-  | awk '{print $2}' | grep -v '/' || true)
-
-# Get existing FreeSurfer subdatasets
-existing_freesurfer=()
-if [[ -d "$FS_ABS" && -f "$FS_ABS/.gitmodules" ]]; then
-  while IFS= read -r submod; do
-    [[ -n "$submod" ]] && existing_freesurfer+=("$(basename "$submod")")
-  done < <(git -C "$FS_ABS" config -f .gitmodules --get-regexp 'submodule\..*\.path' 2>/dev/null \
-    | awk '{print $2}' || true)
-fi
-
-info "Existing subdatasets — fMRIPrep: ${#existing_fmriprep[@]}, FreeSurfer: ${#existing_freesurfer[@]}"
-
-# Find new fMRIPrep repos
-new_fmriprep=()
-for repo in "${FMRIPREP_REPOS[@]}"; do
-  subject_short="${repo#fmriprep-}"
-  subject_id="sub-${subject_short}"
-  # Check if already registered
-  found=0
-  for existing in "${existing_fmriprep[@]}"; do
-    if [[ "$existing" == "$subject_id" ]]; then
-      found=1
-      break
-    fi
-  done
-  if [[ $found -eq 0 ]]; then
-    new_fmriprep+=("$repo")
-  fi
-done
-
-# Find new FreeSurfer repos
-new_freesurfer=()
-for repo in "${FREESURFER_REPOS[@]}"; do
-  subject_ses="${repo#freesurfer-}"
-  fs_dir_name="sub-${subject_ses}"
-  found=0
-  for existing in "${existing_freesurfer[@]}"; do
-    if [[ "$existing" == "$fs_dir_name" ]]; then
-      found=1
-      break
-    fi
-  done
-  if [[ $found -eq 0 ]]; then
-    new_freesurfer+=("$repo")
-  fi
-done
-
-info "New repos to register — fMRIPrep: ${#new_fmriprep[@]}, FreeSurfer: ${#new_freesurfer[@]}"
-
-if [[ ${#new_fmriprep[@]} -eq 0 && ${#new_freesurfer[@]} -eq 0 ]]; then
-  info "Nothing to reconcile — all GIN repos are already registered."
-  exit 0
-fi
-
-if [[ $DRY_RUN -eq 1 ]]; then
-  info "DRY RUN — would register:"
-  for repo in "${new_fmriprep[@]}"; do
-    subject_short="${repo#fmriprep-}"
-    info "  fMRIPrep: sub-${subject_short} <- ${GIN_ORG}/${repo}"
-  done
-  for repo in "${new_freesurfer[@]}"; do
-    subject_ses="${repo#freesurfer-}"
-    info "  FreeSurfer: sub-${subject_ses} <- ${GIN_ORG}/${repo}"
-  done
-  exit 0
-fi
-
-# -------------------------
-# Phase 3 — Install new fMRIPrep subdatasets
-# -------------------------
-installed_fmriprep=0
-for repo in "${new_fmriprep[@]}"; do
-  subject_short="${repo#fmriprep-}"
-  subject_id="sub-${subject_short}"
-  clone_url="git@gin.g-node.org:/${GIN_ORG}/${repo}.git"
-
-  info "Installing fMRIPrep subdataset: $subject_id"
-  if datalad clone -d . "$clone_url" "$subject_id" 2>/dev/null; then
-    success "Installed $subject_id"
-    (( installed_fmriprep++ )) || true
-  else
-    fail "Failed to install $subject_id from $clone_url"
-  fi
-done
-
-# -------------------------
-# Phase 4 — Install new FreeSurfer subdatasets
-# -------------------------
-installed_freesurfer=0
-for repo in "${new_freesurfer[@]}"; do
-  subject_ses="${repo#freesurfer-}"
-  fs_dir_name="sub-${subject_ses}"
-  clone_url="git@gin.g-node.org:/${GIN_ORG}/${repo}.git"
-
-  info "Installing FreeSurfer subdataset: $fs_dir_name"
-  if datalad clone -d "$FS_REL" "$clone_url" "${FS_REL}/${fs_dir_name}" 2>/dev/null; then
-    success "Installed $fs_dir_name"
-    (( installed_freesurfer++ )) || true
-  else
-    fail "Failed to install $fs_dir_name from $clone_url"
-  fi
-done
-
-# -------------------------
-# Phase 5 — Update participants.tsv
-# -------------------------
 # Convert fmriprep.toml dir name (YYYYMMDD-HHMMSS) to ISO 8601
 toml_dir_to_iso() {
   echo "$1" | sed 's/\([0-9]\{4\}\)\([0-9]\{2\}\)\([0-9]\{2\}\)-\([0-9]\{2\}\)\([0-9]\{2\}\)\([0-9]\{2\}\)/\1-\2-\3T\4:\5:\6/'
 }
 
-# Convert nipype timestamp (YYMMDD-HH:MM:SS) to ISO 8601
-nipype_ts_to_iso() {
-  echo "$1" | sed 's/^\([0-9]\{2\}\)\([0-9]\{2\}\)\([0-9]\{2\}\)-/20\1-\2-\3T/'
+# -------------------------
+# Args
+# -------------------------
+PROJECT_ROOT="."
+SITE_FILTERS=()
+DRY_RUN=0
+DO_PUSH=0
+DELETE_BRANCHES=1
+REMOTE="gin"
+LOGS_DIR=""
+
+usage() {
+  cat <<EOF
+Usage:
+  reconcile_subdatasets.sh [-C <superdataset-root>] [--site <prefix>] ...
+                           [--dry-run] [--push] [--no-delete-branches]
+                           [--remote <name>] [--logs-dir <path>]
+
+Options:
+  -C <path>              Superdataset root (default: .)
+  --site <prefix>        Filter to a site prefix (repeatable, e.g. --site v1s0 --site v2s3)
+  --dry-run              Show what would happen without making changes
+  --push                 Push merged master to github (triggers gin via publish-depends)
+  --no-delete-branches   Keep merged branches on remote after merging
+  --remote <name>        Remote to fetch job branches from (default: gin)
+  --logs-dir <path>      SLURM logs directory (default: <root>/logs)
+  -h, --help             Show this help
+EOF
 }
 
-TSV="participants.tsv"
-META_TMPFILE="$(mktemp)"
-trap 'rm -f "$META_TMPFILE"' EXIT
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    -C) PROJECT_ROOT="$2"; shift 2 ;;
+    --site) SITE_FILTERS+=("$2"); shift 2 ;;
+    --dry-run) DRY_RUN=1; shift ;;
+    --push) DO_PUSH=1; shift ;;
+    --no-delete-branches) DELETE_BRANCHES=0; shift ;;
+    --remote) REMOTE="$2"; shift 2 ;;
+    --logs-dir) LOGS_DIR="$2"; shift 2 ;;
+    -h|--help) usage; exit 0 ;;
+    *) die "Unknown arg: $1" ;;
+  esac
+done
 
-# Pre-index SLURM logs
+# -------------------------
+# Phase 0 — Setup
+# -------------------------
+PROJECT_ROOT="$(cd "$PROJECT_ROOT" && pwd)"
+DERIV_DIR="$PROJECT_ROOT/derivatives"
+
+[[ -d "$PROJECT_ROOT/.datalad" ]] || die "Not a DataLad superdataset: $PROJECT_ROOT"
+[[ -d "$DERIV_DIR" ]] || die "Derivatives directory not found: $DERIV_DIR"
+
+# SLURM logs directory
+: "${LOGS_DIR:=$PROJECT_ROOT/logs}"
+if [[ -d "$LOGS_DIR" ]]; then
+  info "SLURM logs directory: $LOGS_DIR"
+else
+  warn "SLURM logs directory not found: $LOGS_DIR"
+  LOGS_DIR=""
+fi
+
+# Build subject→logfile index from SLURM logs
 LOG_INDEX=""
+TMPFILES=()
+cleanup() {
+  rm -f "${TMPFILES[@]}" 2>/dev/null || true
+}
+trap cleanup EXIT
+
 if [[ -n "$LOGS_DIR" ]]; then
   LOG_INDEX="$(mktemp)"
-  trap 'rm -f "$META_TMPFILE" "$LOG_INDEX"' EXIT
+  TMPFILES+=("$LOG_INDEX")
 
   info "Indexing successful SLURM logs..."
   while IFS= read -r logfile; do
@@ -275,87 +114,262 @@ if [[ -n "$LOGS_DIR" ]]; then
     if [[ -n "$sub" ]]; then
       printf '%s\t%s\n' "$sub" "$logfile" >> "$LOG_INDEX"
     fi
-  done < <(grep -l 'fMRIPrep finished successfully' "$LOGS_DIR"/fmriprep_*.out 2>/dev/null)
+  done < <(grep -l 'fMRIPrep finished successfully' "$LOGS_DIR"/fmriprep_*.out 2>/dev/null || true)
+
+  log_count="$(wc -l < "$LOG_INDEX" | tr -d ' ')"
+  info "Indexed $log_count successful log(s)."
 fi
 
-# Extract metadata for each newly installed fMRIPrep subject
-for repo in "${new_fmriprep[@]}"; do
-  subject_short="${repo#fmriprep-}"
-  subject_id="sub-${subject_short}"
+# -------------------------
+# Phase 1 — Discover site datasets
+# -------------------------
+SITE_DIRS=()
+for site_dir in "$DERIV_DIR"/v[12]s*/; do
+  [[ -d "$site_dir" ]] || continue
+  [[ -d "$site_dir/.git" || -f "$site_dir/.git" ]] || continue
 
-  if [[ ! -d "$subject_id" ]]; then
+  site_prefix="$(basename "$site_dir")"
+
+  # Apply --site filter if given
+  if [[ ${#SITE_FILTERS[@]} -gt 0 ]]; then
+    match=0
+    for f in "${SITE_FILTERS[@]}"; do
+      [[ "$site_prefix" == "$f" ]] && match=1 && break
+    done
+    [[ $match -eq 1 ]] || continue
+  fi
+
+  SITE_DIRS+=("$site_dir")
+done
+
+info "Found ${#SITE_DIRS[@]} site dataset(s) to process."
+
+if [[ ${#SITE_DIRS[@]} -eq 0 ]]; then
+  info "Nothing to do."
+  exit 0
+fi
+
+# -------------------------
+# Phase 2 — Per-site loop
+# -------------------------
+total_merged=0
+total_failed=0
+total_skipped=0
+sites_modified=0
+
+for SITE_DIR in "${SITE_DIRS[@]}"; do
+  SITE_PREFIX="$(basename "$SITE_DIR")"
+  info "--- Processing site: $SITE_PREFIX ---"
+
+  # Ensure we are on master
+  current_branch="$(git -C "$SITE_DIR" symbolic-ref --short HEAD 2>/dev/null)" || true
+  if [[ "$current_branch" != "master" ]]; then
+    warn "$SITE_PREFIX: not on master (on $current_branch) — skipping"
     continue
   fi
 
-  # stc_ref_time from logs/CITATION.md (parent-level, generated by fMRIPrep)
-  stc_val=""
-  if [[ -f "logs/CITATION.md" ]]; then
-    stc_val="$(sed -n 's/.*slice-time corrected to \([0-9.]*\)s.*/\1/p' logs/CITATION.md 2>/dev/null | head -1)" || true
+  # A. Fetch remote
+  info "$SITE_PREFIX: fetching from '$REMOTE'..."
+  if ! git -C "$SITE_DIR" fetch "$REMOTE" 2>/dev/null; then
+    warn "$SITE_PREFIX: cannot fetch remote '$REMOTE' — skipping"
+    continue
   fi
 
-  # Timing from SLURM logs
-  start_iso=""
-  stop_iso=""
-  if [[ -n "$LOG_INDEX" ]]; then
-    logfile="$(awk -F'\t' -v sid="$subject_id" '$1 == sid { print $2; exit }' "$LOG_INDEX")"
-    if [[ -n "$logfile" && -f "$logfile" ]]; then
-      start_raw="$(grep -B1 'Running fMRIPrep version' "$logfile" \
-        | sed -n 's/^\([0-9]\{6\}-[0-9:]*\).*/\1/p' | head -1)" || true
-      if [[ -n "$start_raw" ]]; then
-        start_iso="$(nipype_ts_to_iso "$start_raw")"
+  # B. Discover unmerged job branches
+  ALL_BRANCHES=()
+  while IFS= read -r line; do
+    [[ -n "$line" ]] && ALL_BRANCHES+=("$line")
+  done < <(git -C "$SITE_DIR" branch -r 2>/dev/null \
+    | sed 's/^[[:space:]]*//' \
+    | grep "^${REMOTE}/job/" || true)
+
+  if [[ ${#ALL_BRANCHES[@]} -eq 0 ]]; then
+    info "$SITE_PREFIX: no job branches found."
+    continue
+  fi
+
+  UNMERGED=()
+  ALREADY_MERGED=()
+  for ref in "${ALL_BRANCHES[@]}"; do
+    if git -C "$SITE_DIR" merge-base --is-ancestor "$ref" master 2>/dev/null; then
+      ALREADY_MERGED+=("$ref")
+    else
+      UNMERGED+=("$ref")
+    fi
+  done
+
+  info "$SITE_PREFIX: ${#UNMERGED[@]} unmerged, ${#ALREADY_MERGED[@]} already merged."
+  (( total_skipped += ${#ALREADY_MERGED[@]} )) || true
+
+  if [[ ${#UNMERGED[@]} -eq 0 ]]; then
+    # Still handle branch cleanup for already-merged branches
+    if [[ $DELETE_BRANCHES -eq 1 && ${#ALREADY_MERGED[@]} -gt 0 && $DRY_RUN -eq 0 ]]; then
+      info "$SITE_PREFIX: cleaning up ${#ALREADY_MERGED[@]} already-merged branch(es)..."
+      delete_refspecs=()
+      for ref in "${ALREADY_MERGED[@]}"; do
+        branch_name="${ref#${REMOTE}/}"
+        delete_refspecs+=(":refs/heads/${branch_name}")
+      done
+      git -C "$SITE_DIR" push "$REMOTE" "${delete_refspecs[@]}" 2>/dev/null || true
+      git -C "$SITE_DIR" remote prune "$REMOTE" 2>/dev/null || true
+    fi
+    continue
+  fi
+
+  # C. Extract metadata from unmerged branches
+  META_TMPFILE="$(mktemp)"
+  TMPFILES+=("$META_TMPFILE")
+
+  for ref in "${UNMERGED[@]}"; do
+    # Subject ID from branch name: gin/job/sub-v1s0x0050642 → sub-v1s0x0050642
+    subject=""
+    IFS='/' read -ra parts <<< "$ref"
+    for part in "${parts[@]}"; do
+      if [[ "$part" == sub-* ]]; then
+        subject="$part"
+        break
       fi
-      stop_raw="$(grep -B1 'fMRIPrep finished successfully' "$logfile" \
-        | sed -n 's/^\([0-9]\{6\}-[0-9:]*\).*/\1/p' | head -1)" || true
-      if [[ -n "$stop_raw" ]]; then
-        stop_iso="$(nipype_ts_to_iso "$stop_raw")"
+    done
+    [[ -n "$subject" ]] || { warn "Cannot extract subject from $ref — skipping"; continue; }
+
+    # stc_ref_time from logs/CITATION.md on the branch
+    stc_val=""
+    stc_val="$(git -C "$SITE_DIR" show "${ref}:logs/CITATION.md" 2>/dev/null \
+      | sed -n 's/.*slice-time corrected to \([0-9.]*\)s.*/\1/p')" || true
+
+    # Timing: prefer direct ISO lines from SLURM logs
+    start_iso=""
+    stop_iso=""
+
+    if [[ -n "$LOG_INDEX" ]]; then
+      logfile="$(awk -F'\t' -v sid="$subject" '$1 == sid { print $2; exit }' "$LOG_INDEX")"
+      if [[ -n "$logfile" && -f "$logfile" ]]; then
+        # Direct ISO timestamps from sbatch (fmriprep_start=, fmriprep_stop=)
+        start_iso="$(sed -n 's/.*fmriprep_start=\([0-9T:-]*\).*/\1/p' "$logfile" | head -1)" || true
+        stop_iso="$(sed -n 's/.*fmriprep_stop=\([0-9T:-]*\).*/\1/p' "$logfile" | head -1)" || true
+
+        # Fallback: nipype timestamps
+        if [[ -z "$start_iso" ]]; then
+          start_raw="$(grep -B1 'Running fMRIPrep version' "$logfile" \
+            | sed -n 's/^\([0-9]\{6\}-[0-9:]*\).*/\1/p' | head -1)" || true
+          [[ -n "$start_raw" ]] && start_iso="$(nipype_ts_to_iso "$start_raw")"
+        fi
+        if [[ -z "$stop_iso" ]]; then
+          stop_raw="$(grep -B1 'fMRIPrep finished successfully' "$logfile" \
+            | sed -n 's/^\([0-9]\{6\}-[0-9:]*\).*/\1/p' | head -1)" || true
+          [[ -n "$stop_raw" ]] && stop_iso="$(nipype_ts_to_iso "$stop_raw")"
+        fi
       fi
     fi
+
+    # Fallback for start: fmriprep.toml directory name on the branch
+    if [[ -z "$start_iso" ]]; then
+      start_raw=""
+      start_raw="$(git -C "$SITE_DIR" ls-tree -r --name-only "$ref" -- "${subject}/" 2>/dev/null \
+        | sed -n 's|.*/log/\([0-9]\{8\}-[0-9]\{6\}\)_.*/fmriprep\.toml|\1|p' \
+        | head -1)" || true
+      [[ -n "$start_raw" ]] && start_iso="$(toml_dir_to_iso "$start_raw")"
+    fi
+
+    printf '%s\t%s\t%s\t%s\n' \
+      "$subject" "${stc_val:-n/a}" "${start_iso:-n/a}" "${stop_iso:-n/a}" \
+      >> "$META_TMPFILE"
+
+    if [[ $DRY_RUN -eq 1 ]]; then
+      info "  $ref  $subject  stc=${stc_val:-n/a}  start=${start_iso:-n/a}  stop=${stop_iso:-n/a}"
+    fi
+  done
+
+  if [[ $DRY_RUN -eq 1 ]]; then
+    continue
   fi
 
-  # Fallback for start: fmriprep.toml log directory
-  if [[ -z "$start_iso" ]]; then
-    start_raw="$(find "$subject_id" -path '*/log/*/fmriprep.toml' 2>/dev/null \
-      | sed -n 's|.*/log/\([0-9]\{8\}-[0-9]\{6\}\)_.*/fmriprep\.toml|\1|p' \
-      | head -1)" || true
-    if [[ -n "$start_raw" ]]; then
-      start_iso="$(toml_dir_to_iso "$start_raw")"
-    fi
+  # D. Octopus merge
+  site_merged=0
+  site_failed=0
+  NEWLY_MERGED=()
+
+  # Try octopus merge first (all branches at once)
+  branch_refs=("${UNMERGED[@]}")
+  info "$SITE_PREFIX: attempting octopus merge of ${#branch_refs[@]} branch(es)..."
+
+  if git -C "$SITE_DIR" merge --no-edit "${branch_refs[@]}" 2>/dev/null; then
+    success "$SITE_PREFIX: octopus merge succeeded (${#branch_refs[@]} branches)"
+    NEWLY_MERGED+=("${branch_refs[@]}")
+    (( site_merged += ${#branch_refs[@]} )) || true
+  else
+    # Octopus failed — abort and fall back to sequential
+    git -C "$SITE_DIR" merge --abort 2>/dev/null || true
+    warn "$SITE_PREFIX: octopus merge failed — falling back to sequential"
+
+    for ref in "${branch_refs[@]}"; do
+      if git -C "$SITE_DIR" merge --no-edit "$ref" 2>/dev/null; then
+        success "$SITE_PREFIX: merged $ref"
+        NEWLY_MERGED+=("$ref")
+        (( site_merged++ )) || true
+        continue
+      fi
+
+      # Check if only CITATION files conflict
+      conflicted="$(git -C "$SITE_DIR" diff --name-only --diff-filter=U)"
+      only_citation=1
+      while IFS= read -r cfile; do
+        [[ -z "$cfile" ]] && continue
+        case "$cfile" in
+          logs/CITATION.md|logs/CITATION.html|logs/CITATION.tex) ;;
+          *) only_citation=0; break ;;
+        esac
+      done <<< "$conflicted"
+
+      if [[ $only_citation -eq 1 && -n "$conflicted" ]]; then
+        # Resolve: keep master's CITATION files
+        git -C "$SITE_DIR" checkout master -- logs/CITATION.md logs/CITATION.html logs/CITATION.tex 2>/dev/null || true
+        git -C "$SITE_DIR" add logs/CITATION.md logs/CITATION.html logs/CITATION.tex 2>/dev/null || true
+        git -C "$SITE_DIR" commit --no-edit 2>/dev/null
+        success "$SITE_PREFIX: merged $ref (CITATION conflict resolved — kept master)"
+        NEWLY_MERGED+=("$ref")
+        (( site_merged++ )) || true
+      else
+        fail "$SITE_PREFIX: merge conflict in non-CITATION files for $ref — aborting"
+        git -C "$SITE_DIR" merge --abort 2>/dev/null || true
+        (( site_failed++ )) || true
+      fi
+    done
   fi
 
-  printf '%s\t%s\t%s\t%s\n' \
-    "$subject_id" "${stc_val:-n/a}" "${start_iso:-n/a}" "${stop_iso:-n/a}" \
-    >> "$META_TMPFILE"
-done
+  (( total_merged += site_merged )) || true
+  (( total_failed += site_failed )) || true
 
-# Build final participants.tsv
-if [[ -s "$META_TMPFILE" ]]; then
-  {
-    if [[ -f "$TSV" ]]; then
-      tail -n +2 "$TSV"
-    fi
-    cat "$META_TMPFILE"
-  } | awk -F'\t' '{
-    pid=$1; stc=$2; start=$3; stop=$4
-    data_stc[pid] = stc
-    data_start[pid] = start
-    data_stop[pid] = stop
-  } END {
-    for (k in data_stc)
-      print k "\t" data_stc[k] "\t" data_start[k] "\t" data_stop[k]
-  }' | sort -t$'\t' -k1,1 > "${TSV}.tmp"
+  # E. Update participants.tsv
+  if [[ $site_merged -gt 0 && -s "$META_TMPFILE" ]]; then
+    TSV="$SITE_DIR/participants.tsv"
 
-  {
-    printf 'participant_id\tstc_ref_time\tfmriprep_start\tfmriprep_stop\n'
-    cat "${TSV}.tmp"
-  } > "$TSV"
-  rm -f "${TSV}.tmp"
-fi
+    {
+      # Existing entries (skip header)
+      if [[ -f "$TSV" ]]; then
+        tail -n +2 "$TSV"
+      fi
+      # Newly extracted entries
+      cat "$META_TMPFILE"
+    } | awk -F'\t' '{
+      pid=$1; stc=$2; start=$3; stop=$4
+      data_stc[pid] = stc
+      data_start[pid] = start
+      data_stop[pid] = stop
+    } END {
+      for (k in data_stc)
+        print k "\t" data_stc[k] "\t" data_start[k] "\t" data_stop[k]
+    }' | sort -t$'\t' -k1,1 > "${TSV}.tmp"
 
-# -------------------------
-# Phase 6 — Write participants.json sidecar and save
-# -------------------------
-TSV_JSON="participants.json"
-cat > "$TSV_JSON" <<'JSONEOF'
+    {
+      printf 'participant_id\tstc_ref_time\tfmriprep_start\tfmriprep_stop\n'
+      cat "${TSV}.tmp"
+    } > "$TSV"
+    rm -f "${TSV}.tmp"
+
+    # Write participants.json sidecar
+    TSV_JSON="$SITE_DIR/participants.json"
+    cat > "$TSV_JSON" <<'JSONEOF'
 {
   "participant_id": {
     "Description": "Participant identifier"
@@ -373,44 +387,77 @@ cat > "$TSV_JSON" <<'JSONEOF'
 }
 JSONEOF
 
-# Save freesurfer intermediate
-if [[ $installed_freesurfer -gt 0 ]]; then
-  datalad save -d "$FS_REL" -m "Register $installed_freesurfer new FreeSurfer subdataset(s)"
-fi
+    tsv_count=$(( $(wc -l < "$TSV") - 1 ))
+    info "$SITE_PREFIX: participants.tsv updated ($tsv_count subjects)"
 
-# Save derivatives parent
-datalad save -d . -m "Reconcile: register $installed_fmriprep fMRIPrep + $installed_freesurfer FreeSurfer subdataset(s)"
+    # Commit within site dataset
+    git -C "$SITE_DIR" add participants.tsv participants.json
+    if ! git -C "$SITE_DIR" diff --cached --quiet -- participants.tsv participants.json; then
+      git -C "$SITE_DIR" commit -m "enh: update participants.tsv/json after merging $site_merged job branch(es)"
+      success "$SITE_PREFIX: committed participants.tsv and participants.json"
+    fi
 
-tsv_count=0
-if [[ -f "$TSV" ]]; then
-  tsv_count=$(( $(wc -l < "$TSV") - 1 ))
-fi
-info "participants.tsv: $tsv_count subject(s)."
-
-# -------------------------
-# Phase 7 — Push parent datasets (optional)
-# -------------------------
-if [[ $DO_PUSH -eq 1 ]]; then
-  info "Pushing to GIN..."
-  if datalad push --to gin; then
-    success "GIN synced."
-  else
-    warn "datalad push --to gin failed."
+    (( sites_modified++ )) || true
   fi
 
-  info "Pushing to origin (GitHub)..."
-  if datalad push --to origin; then
-    success "GitHub synced."
-  else
-    warn "datalad push --to origin failed — sync manually."
+  # F. Push (if --push)
+  if [[ $DO_PUSH -eq 1 && $site_merged -gt 0 ]]; then
+    info "$SITE_PREFIX: pushing to github..."
+    if datalad push -d "$SITE_DIR" --to github 2>/dev/null; then
+      success "$SITE_PREFIX: pushed to github"
+    else
+      warn "$SITE_PREFIX: datalad push --to github failed"
+    fi
   fi
+
+  # G. Delete merged branches (unless --no-delete-branches)
+  if [[ $DELETE_BRANCHES -eq 1 ]]; then
+    TO_DELETE=()
+    TO_DELETE+=("${ALREADY_MERGED[@]}")
+    TO_DELETE+=(${NEWLY_MERGED[@]+"${NEWLY_MERGED[@]}"})
+
+    if [[ ${#TO_DELETE[@]} -gt 0 ]]; then
+      info "$SITE_PREFIX: deleting ${#TO_DELETE[@]} merged branch(es) from '$REMOTE'..."
+      delete_refspecs=()
+      for ref in "${TO_DELETE[@]}"; do
+        branch_name="${ref#${REMOTE}/}"
+        if git -C "$SITE_DIR" show-ref --verify --quiet "refs/remotes/${ref}" 2>/dev/null; then
+          delete_refspecs+=(":refs/heads/${branch_name}")
+        fi
+      done
+
+      if [[ ${#delete_refspecs[@]} -gt 0 ]]; then
+        if git -C "$SITE_DIR" push "$REMOTE" "${delete_refspecs[@]}" 2>/dev/null; then
+          success "$SITE_PREFIX: deleted ${#delete_refspecs[@]} branch(es) from '$REMOTE'"
+        else
+          warn "$SITE_PREFIX: some branch deletions failed"
+        fi
+      fi
+      git -C "$SITE_DIR" remote prune "$REMOTE" 2>/dev/null || true
+    fi
+  fi
+done
+
+# -------------------------
+# Phase 3 — Save superdataset
+# -------------------------
+if [[ $DRY_RUN -eq 0 && $sites_modified -gt 0 ]]; then
+  info "Saving superdataset state..."
+  datalad save -d "$PROJECT_ROOT" -m "Reconcile $total_merged subject(s) across $sites_modified site(s)"
+  success "Superdataset saved."
 fi
 
 # -------------------------
-# Summary
+# Phase 4 — Summary
 # -------------------------
 echo ""
 info "===== Summary ====="
-success "fMRIPrep subdatasets installed: $installed_fmriprep"
-success "FreeSurfer subdatasets installed: $installed_freesurfer"
-info "participants.tsv: $tsv_count subject(s)"
+if [[ $DRY_RUN -eq 1 ]]; then
+  info "Dry run — no changes made."
+fi
+success "Merged:          $total_merged"
+warn    "Already merged:  $total_skipped"
+if [[ $total_failed -gt 0 ]]; then
+  fail  "Failed:          $total_failed"
+fi
+info    "Sites modified:  $sites_modified"
