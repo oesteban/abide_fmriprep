@@ -26,173 +26,173 @@
 	url = https://github.com/oesteban/abide-fmriprep-derivatives-logs.git
 [submodule "derivatives/v1s0"]
 	path = derivatives/v1s0
-	url = ./derivatives/v1s0
+	url = https://github.com/abide-fmriprep/v1s0.git
 	datalad-id = dc61db2d-d32e-4b37-99f7-bf47cd6199cc
 [submodule "derivatives/v1s1"]
 	path = derivatives/v1s1
-	url = ./derivatives/v1s1
+	url = https://github.com/abide-fmriprep/v1s1.git
 	datalad-id = 44de9c82-81a2-4427-8e39-ecf071b8a058
 [submodule "derivatives/v1s10"]
 	path = derivatives/v1s10
-	url = ./derivatives/v1s10
+	url = https://github.com/abide-fmriprep/v1s10.git
 	datalad-id = d997ae13-8a1c-447c-97cd-d7da02b09786
 [submodule "derivatives/v1s11"]
 	path = derivatives/v1s11
-	url = ./derivatives/v1s11
+	url = https://github.com/abide-fmriprep/v1s11.git
 	datalad-id = 170aaf03-8e7c-479b-aed1-007721987c4f
 [submodule "derivatives/v1s12"]
 	path = derivatives/v1s12
-	url = ./derivatives/v1s12
+	url = https://github.com/abide-fmriprep/v1s12.git
 	datalad-id = cf86b0a5-face-4d4e-a790-2cfb6e960dba
 [submodule "derivatives/v1s13"]
 	path = derivatives/v1s13
-	url = ./derivatives/v1s13
+	url = https://github.com/abide-fmriprep/v1s13.git
 	datalad-id = 7869a574-b028-4265-bc72-852180d49a48
 [submodule "derivatives/v1s14"]
 	path = derivatives/v1s14
-	url = ./derivatives/v1s14
+	url = https://github.com/abide-fmriprep/v1s14.git
 	datalad-id = bbe7be05-2a06-41be-a6d9-f168a3655922
 [submodule "derivatives/v1s15"]
 	path = derivatives/v1s15
-	url = ./derivatives/v1s15
+	url = https://github.com/abide-fmriprep/v1s15.git
 	datalad-id = 39e86784-78f0-4d1a-883b-100ef187526a
 [submodule "derivatives/v1s16"]
 	path = derivatives/v1s16
-	url = ./derivatives/v1s16
+	url = https://github.com/abide-fmriprep/v1s16.git
 	datalad-id = 6179d71e-34a7-403d-9916-c9322aad2e79
 [submodule "derivatives/v1s17"]
 	path = derivatives/v1s17
-	url = ./derivatives/v1s17
+	url = https://github.com/abide-fmriprep/v1s17.git
 	datalad-id = 967bd83b-1e66-4003-985d-3157cbc997ae
 [submodule "derivatives/v1s18"]
 	path = derivatives/v1s18
-	url = ./derivatives/v1s18
+	url = https://github.com/abide-fmriprep/v1s18.git
 	datalad-id = 81b8dd3f-cf90-4ce5-a676-a3d793e81d73
 [submodule "derivatives/v1s19"]
 	path = derivatives/v1s19
-	url = ./derivatives/v1s19
+	url = https://github.com/abide-fmriprep/v1s19.git
 	datalad-id = fffa60ca-0773-4285-9831-c363a61c5e49
 [submodule "derivatives/v1s2"]
 	path = derivatives/v1s2
-	url = ./derivatives/v1s2
+	url = https://github.com/abide-fmriprep/v1s2.git
 	datalad-id = 6b962935-a009-462d-a0d3-b1f731d72bff
 [submodule "derivatives/v1s20"]
 	path = derivatives/v1s20
-	url = ./derivatives/v1s20
+	url = https://github.com/abide-fmriprep/v1s20.git
 	datalad-id = e1d419e4-ec36-4000-aca5-104bbd26c3bc
 [submodule "derivatives/v1s21"]
 	path = derivatives/v1s21
-	url = ./derivatives/v1s21
+	url = https://github.com/abide-fmriprep/v1s21.git
 	datalad-id = b3421942-c4ba-46cd-996e-6d584c7c98af
 [submodule "derivatives/v1s22"]
 	path = derivatives/v1s22
-	url = ./derivatives/v1s22
+	url = https://github.com/abide-fmriprep/v1s22.git
 	datalad-id = ceb8f266-9d9c-4b8b-8660-28007e826ab7
 [submodule "derivatives/v1s23"]
 	path = derivatives/v1s23
-	url = ./derivatives/v1s23
+	url = https://github.com/abide-fmriprep/v1s23.git
 	datalad-id = a8f7c587-6ad2-47c7-8093-c786d208b184
 [submodule "derivatives/v1s3"]
 	path = derivatives/v1s3
-	url = ./derivatives/v1s3
+	url = https://github.com/abide-fmriprep/v1s3.git
 	datalad-id = b79838b1-20bd-4b4d-a2c1-176ffd84aa4f
 [submodule "derivatives/v1s4"]
 	path = derivatives/v1s4
-	url = ./derivatives/v1s4
+	url = https://github.com/abide-fmriprep/v1s4.git
 	datalad-id = e31905e4-172b-48ad-83f4-a0190dc2495a
 [submodule "derivatives/v1s5"]
 	path = derivatives/v1s5
-	url = ./derivatives/v1s5
+	url = https://github.com/abide-fmriprep/v1s5.git
 	datalad-id = e3006251-77d1-4f6a-9d47-cfa1d6cceab7
 [submodule "derivatives/v1s6"]
 	path = derivatives/v1s6
-	url = ./derivatives/v1s6
+	url = https://github.com/abide-fmriprep/v1s6.git
 	datalad-id = 23c35ec3-6480-409f-a22c-37138fffda60
 [submodule "derivatives/v1s7"]
 	path = derivatives/v1s7
-	url = ./derivatives/v1s7
+	url = https://github.com/abide-fmriprep/v1s7.git
 	datalad-id = 838c5821-a482-463b-bea9-6d7d0e646946
 [submodule "derivatives/v1s8"]
 	path = derivatives/v1s8
-	url = ./derivatives/v1s8
+	url = https://github.com/abide-fmriprep/v1s8.git
 	datalad-id = a430dcac-553e-4f35-bfd7-8fa3bef27ec7
 [submodule "derivatives/v1s9"]
 	path = derivatives/v1s9
-	url = ./derivatives/v1s9
+	url = https://github.com/abide-fmriprep/v1s9.git
 	datalad-id = 83e7f71d-92fc-4a0f-8724-7f681ef2eb22
 [submodule "derivatives/v2s0"]
 	path = derivatives/v2s0
-	url = ./derivatives/v2s0
+	url = https://github.com/abide-fmriprep/v2s0.git
 	datalad-id = bc2f8533-12b6-4b06-ac9e-cda6a9506259
 [submodule "derivatives/v2s1"]
 	path = derivatives/v2s1
-	url = ./derivatives/v2s1
+	url = https://github.com/abide-fmriprep/v2s1.git
 	datalad-id = ace92d9c-4d14-4552-b442-d7f0b6e8ddcd
 [submodule "derivatives/v2s10"]
 	path = derivatives/v2s10
-	url = ./derivatives/v2s10
+	url = https://github.com/abide-fmriprep/v2s10.git
 	datalad-id = 76324385-eb49-4c81-9871-e3c0c724137c
 [submodule "derivatives/v2s11"]
 	path = derivatives/v2s11
-	url = ./derivatives/v2s11
+	url = https://github.com/abide-fmriprep/v2s11.git
 	datalad-id = f32e9e78-5d10-48d6-9112-a96336da7292
 [submodule "derivatives/v2s12"]
 	path = derivatives/v2s12
-	url = ./derivatives/v2s12
+	url = https://github.com/abide-fmriprep/v2s12.git
 	datalad-id = e9c56f05-9a5b-4e35-9625-cdb986c0597d
 [submodule "derivatives/v2s13"]
 	path = derivatives/v2s13
-	url = ./derivatives/v2s13
+	url = https://github.com/abide-fmriprep/v2s13.git
 	datalad-id = b309e09d-3769-4ad4-a3e3-a1ded2eceada
 [submodule "derivatives/v2s14"]
 	path = derivatives/v2s14
-	url = ./derivatives/v2s14
+	url = https://github.com/abide-fmriprep/v2s14.git
 	datalad-id = d0c79b7c-77b8-4f21-aa7b-4610d58b574b
 [submodule "derivatives/v2s15"]
 	path = derivatives/v2s15
-	url = ./derivatives/v2s15
+	url = https://github.com/abide-fmriprep/v2s15.git
 	datalad-id = 89ae33a9-59f4-4959-9df5-fde155f90199
 [submodule "derivatives/v2s16"]
 	path = derivatives/v2s16
-	url = ./derivatives/v2s16
+	url = https://github.com/abide-fmriprep/v2s16.git
 	datalad-id = d0a32abf-fd6f-43d1-b9e2-09a34ddae8ad
 [submodule "derivatives/v2s17"]
 	path = derivatives/v2s17
-	url = ./derivatives/v2s17
+	url = https://github.com/abide-fmriprep/v2s17.git
 	datalad-id = ebfe54c9-cd02-4c97-a74f-e54f11e8a96b
 [submodule "derivatives/v2s18"]
 	path = derivatives/v2s18
-	url = ./derivatives/v2s18
+	url = https://github.com/abide-fmriprep/v2s18.git
 	datalad-id = 784c0b01-c918-412f-869b-1dc81b39eb1c
 [submodule "derivatives/v2s2"]
 	path = derivatives/v2s2
-	url = ./derivatives/v2s2
+	url = https://github.com/abide-fmriprep/v2s2.git
 	datalad-id = 11e61ba9-e20d-45e0-8329-82025bd70566
 [submodule "derivatives/v2s3"]
 	path = derivatives/v2s3
-	url = ./derivatives/v2s3
+	url = https://github.com/abide-fmriprep/v2s3.git
 	datalad-id = d6941cf4-8cf6-4309-be28-2a9f165585e8
 [submodule "derivatives/v2s4"]
 	path = derivatives/v2s4
-	url = ./derivatives/v2s4
+	url = https://github.com/abide-fmriprep/v2s4.git
 	datalad-id = cd4010f0-915e-42b1-8b5a-de01def490c9
 [submodule "derivatives/v2s5"]
 	path = derivatives/v2s5
-	url = ./derivatives/v2s5
+	url = https://github.com/abide-fmriprep/v2s5.git
 	datalad-id = 853d10bf-e48b-4b6a-acef-eabe75a2b0b3
 [submodule "derivatives/v2s6"]
 	path = derivatives/v2s6
-	url = ./derivatives/v2s6
+	url = https://github.com/abide-fmriprep/v2s6.git
 	datalad-id = 42bd8ff7-1b06-4619-b05f-c8da05672eff
 [submodule "derivatives/v2s7"]
 	path = derivatives/v2s7
-	url = ./derivatives/v2s7
+	url = https://github.com/abide-fmriprep/v2s7.git
 	datalad-id = 37c0f8f7-d9d1-4fe7-908f-894b24bf2e66
 [submodule "derivatives/v2s8"]
 	path = derivatives/v2s8
-	url = ./derivatives/v2s8
+	url = https://github.com/abide-fmriprep/v2s8.git
 	datalad-id = b45efc05-49db-4095-a1b3-26d5856d41b2
 [submodule "derivatives/v2s9"]
 	path = derivatives/v2s9
-	url = ./derivatives/v2s9
+	url = https://github.com/abide-fmriprep/v2s9.git
 	datalad-id = 16eacecc-b5dd-45cb-b9ba-779b18e5ff60
