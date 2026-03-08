@@ -108,3 +108,7 @@
 	path = derivatives/v1s6
 	url = ./derivatives/v1s6
 	datalad-id = 23c35ec3-6480-409f-a22c-37138fffda60
+[submodule "derivatives/v1s7"]
+	path = derivatives/v1s7
+	url = ./derivatives/v1s7
+	datalad-id = 838c5821-a482-463b-bea9-6d7d0e646946
