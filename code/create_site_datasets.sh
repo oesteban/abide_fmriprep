@@ -140,48 +140,50 @@ while IFS=$'\t' read -r site ds name; do
   if [[ -f "$site_dir/.datalad/config" ]]; then
     warn "$site ($ds / $name) — already exists"
     (( skipped++ )) || true
-    continue
+  else
+    info "Creating site dataset: $site ($ds / $name)"
+
+    # Create as subdataset of the superdataset
+    datalad create -d "$PROJECT_ROOT" "$site_dir"
+
+    # Apply cfg_fmriprep procedure (.gitattributes for metadata in git, imaging in annex)
+    datalad run-procedure -d "$site_dir" cfg_fmriprep
+
+    # Write dataset_description.json
+    echo "$DATASET_DESC" > "$site_dir/dataset_description.json"
+
+    # Write .bidsignore
+    echo "$BIDSIGNORE" > "$site_dir/.bidsignore"
+
+    # Create sourcedata/freesurfer placeholder
+    mkdir -p "$site_dir/sourcedata/freesurfer"
+    touch "$site_dir/sourcedata/freesurfer/.gitkeep"
+
+    # Save site dataset
+    datalad save -d "$site_dir" \
+      -m "Initialize site dataset for $site ($ds / $name)"
+
+    success "$site"
+    (( created++ )) || true
   fi
 
-  info "Creating site dataset: $site ($ds / $name)"
-
-  # Create as subdataset of the superdataset
-  datalad create -d "$PROJECT_ROOT" "$site_dir"
-
-  # Apply cfg_fmriprep procedure (.gitattributes for metadata in git, imaging in annex)
-  datalad run-procedure -d "$site_dir" cfg_fmriprep
-
-  # Write dataset_description.json
-  echo "$DATASET_DESC" > "$site_dir/dataset_description.json"
-
-  # Write .bidsignore
-  echo "$BIDSIGNORE" > "$site_dir/.bidsignore"
-
-  # Create sourcedata/freesurfer placeholder
-  mkdir -p "$site_dir/sourcedata/freesurfer"
-  touch "$site_dir/sourcedata/freesurfer/.gitkeep"
-
-  # Save site dataset
-  datalad save -d "$site_dir" \
-    -m "Initialize site dataset for $site ($ds / $name)"
-
-  # Create siblings if requested
+  # Create siblings if requested (runs for both new and existing datasets)
   if [[ $CREATE_SIBLINGS -eq 1 ]]; then
     # GIN sibling: git + annex data (HTTPS fetch, SSH push)
     info "  Creating GIN sibling: ${GIN_ORG}/$site"
     datalad create-sibling-gin -d "$site_dir" \
       --name gin --access-protocol https-ssh \
-      --existing skip \
-      --org "$GIN_ORG" --repo-name "$site"
+      --existing skip --credential gin \
+      "${GIN_ORG}/${site}"
     sleep "$SIBLING_DELAY"
 
     # GitHub sibling: git only (HTTPS fetch, SSH push; publish-depends gin)
     info "  Creating GitHub sibling: ${GITHUB_ORG}/$site"
     datalad create-sibling-github -d "$site_dir" \
-      --github-organization "$GITHUB_ORG" \
       --name github --access-protocol https-ssh \
-      --existing skip \
-      --publish-depends gin
+      --existing skip --credential github \
+      --publish-depends gin \
+      "${GITHUB_ORG}/${site}"
     sleep "$SIBLING_DELAY"
 
     # Initial push to GIN (git + annex), then GitHub (git only)
@@ -197,9 +199,6 @@ while IFS=$'\t' read -r site ds name; do
     git -C "$PROJECT_ROOT" config -f .gitmodules "$_submod_key" "$_github_url"
     info "  .gitmodules URL → $_github_url"
   fi
-
-  success "$site"
-  (( created++ )) || true
 done < "$SITE_LOOKUP"
 
 # -------------------------
