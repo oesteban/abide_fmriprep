@@ -24,3 +24,7 @@
 [submodule "logs"]
 	path = logs
 	url = https://github.com/oesteban/abide-fmriprep-derivatives-logs.git
+[submodule "derivatives/v1s0"]
+	path = derivatives/v1s0
+	url = ./derivatives/v1s0
+	datalad-id = dc61db2d-d32e-4b37-99f7-bf47cd6199cc
