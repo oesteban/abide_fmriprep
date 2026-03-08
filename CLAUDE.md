@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project overview
 
-ABIDE-fMRIPrep preprocesses ABIDE I and ABIDE II brain imaging data (~2,194 subjects from 24 institutions) with fMRIPrep 25.2.4. The project follows a YODA-compliant DataLad layout and targets the HES-SO Calypso HPC cluster for production runs. All executions are recorded with `datalad containers-run` for full provenance.
+ABIDE-fMRIPrep preprocesses ABIDE I and ABIDE II brain imaging data (~2,194 subjects from 43 sites across 24 institutions) with fMRIPrep 25.2.4. The project follows a YODA-compliant DataLad layout and targets the UNIL Curnagl HPC cluster for production runs. All executions are recorded with `datalad containers-run` for full provenance.
 
 **Repository:** `oesteban/abide_fmriprep` on GitHub.
 
@@ -18,8 +18,12 @@ abide_preproc/                     # YODA superdataset root
 │   ├── abide-both/                # Submodule → oesteban/abide-merged (merged BIDS view)
 │   └── templateflow/              # Submodule → templateflow/templateflow
 ├── code/                          # All scripts (run from repo root with relative paths)
-│   ├── build_abide_both.py        # Main build script (1124 lines, stdlib-only Python)
-│   ├── fmriprep-jobarray.sbatch  # SLURM array job (310 lines)
+│   ├── build_abide_both.py        # Main build script (stdlib-only Python)
+│   ├── fmriprep-jobarray.sbatch   # SLURM array job (site-level, job branch workflow)
+│   ├── create_site_datasets.sh    # Initialize per-site DataLad derivative datasets
+│   ├── reconcile_subdatasets.sh   # Post-batch: octopus-merge job branches per site (TODO)
+│   ├── migrate_to_subdatasets.py  # One-time migration from monolithic derivatives (TODO)
+│   ├── merge_job_branches.sh      # DEPRECATED
 │   ├── one-test-subject.sh        # Local Docker smoke test [run/first-local branch only]
 │   ├── calypso/                   # HPC utilities [run/first-local branch only]
 │   │   ├── README.md              # Calypso first-run checklist
@@ -27,8 +31,19 @@ abide_preproc/                     # YODA superdataset root
 │   │   └── preflight.sh           # Environment validation
 │   └── datalad/
 │       └── cfg_fmriprep.py        # DataLad procedure: .gitattributes for derivatives
-├── derivatives/
-│   └── fmriprep-25.2/             # Separate subdataset (git-annex, pushed to GIN)
+├── derivatives/                   # Site-level DataLad subdatasets (43 total)
+│   ├── v1s0/                      # ABIDE I, site 0 (CMU_a) — fMRIPrep output root
+│   │   ├── dataset_description.json
+│   │   ├── .bidsignore
+│   │   ├── sub-v1s0x0050642/      # Standard fMRIPrep output directory
+│   │   ├── sub-v1s0x0050642.html  # QC report
+│   │   └── sourcedata/freesurfer/ # FreeSurfer outputs (regular directories)
+│   │       ├── fsaverage/         # Shared (not versioned per-job)
+│   │       └── sub-v1s0x0050642_ses-1/
+│   ├── v1s1/                      # ABIDE I, site 1
+│   ├── v2s0/                      # ABIDE II, site 0
+│   ├── ...                        # (43 site datasets total)
+│   └── fmriprep-25.2/             # LEGACY: monolithic derivatives (read-only archive)
 ├── docs/
 │   └── paper/                     # Submodule → oesteban/abide-paper (LaTeX manuscript)
 ├── env/
@@ -50,9 +65,16 @@ abide_preproc/                     # YODA superdataset root
 - ABIDE I: `sub-v1s<siteindex>x<orig>` (all under `ses-1`)
 - ABIDE II: `sub-v2s<siteindex>x<orig>` (all under `ses-1`; 46 subjects have `ses-2`)
 - `siteindex` = zero-based alphabetical index within each dataset
+- Site prefix = `v1s<N>` or `v2s<N>` (e.g., `v1s0` = CMU_a, `v2s6` = KKI_1)
 - Example: `sub-v1s0x0050642` = ABIDE I, site index 0 (CMU_a), original ID 0050642
 
-## Git submodules (6 total)
+## Site prefix → site name mapping
+
+43 site prefixes total: 24 from ABIDE I (`v1s0`–`v1s23`) and 19 from ABIDE II (`v2s0`–`v2s18`). Subjects per site range from 6 (v1s7/MaxMun_b) to 211 (v2s6/KKI_1), median ~36.
+
+## Git submodules
+
+The superdataset has the following fixed submodules plus 43 site-level derivative subdatasets:
 
 | Path | Remote | Purpose |
 |------|--------|---------|
@@ -60,8 +82,10 @@ abide_preproc/                     # YODA superdataset root
 | `inputs/abide2` | `datasets.datalad.org/abide2/RawData` | ABIDE II raw BIDS |
 | `inputs/abide-both` | `github.com/oesteban/abide-merged` | Merged self-contained BIDS view |
 | `inputs/templateflow` | `github.com/templateflow/templateflow` | Brain templates |
-| `derivatives/fmriprep-25.2` | `github.com/oesteban/abide-fmriprep-derivatives` | fMRIPrep outputs |
+| `derivatives/fmriprep-25.2` | `github.com/oesteban/abide-fmriprep-derivatives` | Legacy monolithic derivatives |
+| `derivatives/v1s0` | `gin.g-node.org:/abide-fmriprep/v1s0` | Site derivatives (×43) |
 | `docs/paper` | `github.com/oesteban/abide-paper` | LaTeX manuscript |
+| `logs` | `github.com/oesteban/abide-fmriprep-derivatives-logs` | SLURM logs |
 
 ## Key commands
 
@@ -85,6 +109,12 @@ micromamba run -n datalad python3 code/build_abide_both.py --project-root . --si
 **Materialize metadata into git:**
 ```bash
 micromamba run -n datalad python3 code/build_abide_both.py --project-root . --skip-build --materialize-metadata --metadata-jobs 8
+```
+
+**Initialize site-level derivative datasets:**
+```bash
+code/create_site_datasets.sh --project-root .
+code/create_site_datasets.sh --project-root . --create-siblings --gin-org abide-fmriprep
 ```
 
 **Local one-subject smoke test (Docker, requires `run/first-local` branch):**
@@ -135,6 +165,8 @@ Both require these **absolute-path** environment variables before `containers-ru
 
 Container env vars set inside: `TEMPLATEFLOW_HOME=/templateflow`, `TEMPLATEFLOW_USE_DATALAD=on`.
 
+**Important:** `OUT_DIR_HOST` points to the site dataset directory (e.g., `derivatives/v1s0`), not a monolithic derivatives directory.
+
 ## fMRIPrep standard parameters
 
 Output spaces: `MNI152NLin2009cAsym`, `fsLR` (with `--cifti-output 91k`). BIDS validation is skipped (`--skip-bids-validation`).
@@ -159,22 +191,53 @@ datalad get -r tpl-MNI152NLin2009cAsym tpl-MNI152NLin6Asym tpl-OASIS30ANTs tpl-f
 
 **Note:** With `TEMPLATEFLOW_USE_DATALAD=on` (the Docker configuration), fMRIPrep auto-downloads missing templates at runtime and pre-fetching is not strictly required.
 
-## Derivatives dataset
+## Derivatives architecture (site-level datasets)
 
-- **Path:** `derivatives/fmriprep-25.2/`
-- **Remotes:** GitHub (`origin`) for git history; GIN (`gin`) for git-annex data storage
-- **Branch convention:** Job results go on `job/abide-both/{dataset}/{site}/sub-{subject}/{jobid}_{taskid}`
-- **`.bidsignore`:** Excludes `*.html`, `logs/`, `figures/`, `*_xfm.*`, surfaces, and other non-BIDS files from validation
-- **`.gitattributes`:** 40 rules — metadata (JSON, TSV, FreeSurfer text) in git; imaging (`.gii`, `.h5`, `.nii.gz`) in annex
+### Layout
+
+Each of the 43 site prefixes gets its own DataLad subdataset under `derivatives/`. Each site dataset is a valid fMRIPrep BIDS derivatives root. No per-subject subdatasets — subjects are regular directories inside the site dataset.
+
+- **Site datasets:** `derivatives/v1s0/`, `derivatives/v1s1/`, ..., `derivatives/v2s18/`
+- **GIN repos:** `gin.g-node.org:/abide-fmriprep/v1s0`, etc. (one per site)
+- **Subjects inside sites:** `derivatives/v1s0/sub-v1s0x0050642/` (regular directory)
+- **FreeSurfer outputs:** `derivatives/v1s0/sourcedata/freesurfer/sub-v1s0x0050642_ses-1/`
+- **HTML reports:** `derivatives/v1s0/sub-v1s0x0050642.html`
+- **`.gitattributes`:** Applied via `cfg_fmriprep` procedure during site dataset creation
+- **`.bidsignore`:** Excludes `*.html`, `logs/`, `figures/`, `*_xfm.*`, surfaces, and other non-BIDS files
+- **Legacy:** `derivatives/fmriprep-25.2/` is the old monolithic dataset (kept as archive)
+
+### SLURM job workflow (job branches)
+
+Each SLURM job processes one subject and pushes results to the subject's site dataset on a dedicated job branch:
+
+1. **Clone:** Lightweight clone of superdataset to `$SLURM_TMPDIR`
+2. **Install:** `datalad get -n derivatives/<site_prefix>` (site subdataset, lightweight)
+3. **Check:** Skip if subject is on master or job branch already on GIN
+4. **Branch:** `git checkout -b job/sub-v1s0x0050642` in the site subdataset
+5. **Run:** `datalad containers-run --explicit` with per-subject `--output` declarations (shared files like `dataset_description.json`, `CITATION.*`, `fsaverage/` are excluded to prevent merge conflicts)
+6. **Push:** Job branch + annex content pushed to the site's GIN repo (exponential backoff, rescue-to-`$SCRATCH` on failure)
+7. **Reconcile:** After a batch, octopus-merge all job branches per site (guaranteed conflict-free since outputs are disjoint directories)
+
+### Why site-level (not per-subject subdatasets)?
+
+- **43 `.gitmodules` entries** vs ~4,400 with per-subject subdatasets
+- **43 GIN repos** vs ~4,400
+- **Provenance preserved:** `containers-run` commit lives in the site dataset's git history
+- **Simpler reconciliation:** fetch + octopus merge (vs discover + install subdatasets)
+- **Largest site:** v2s6 (KKI_1, 211 subjects, ~95K files) — well within git-annex comfort
+
+### GIN organization: `abide-fmriprep`
+
+One repo per site: `abide-fmriprep/v1s0`, `abide-fmriprep/v1s1`, ..., `abide-fmriprep/v2s18`.
 
 ## DataLad / git-annex conventions
 
 - All files use `MD5E` annex backend (root `.gitattributes`)
 - `code/` has `* annex.largefiles=nothing` — all code is always git-tracked
 - Metadata files (JSON, TSV, bval, bvec) should be git-tracked; imaging binaries stay annexed
-- Six git submodules managed by DataLad (see `.gitmodules`)
+- Fixed submodules managed by DataLad at the superdataset level (see `.gitmodules`)
+- Site-level derivative subdatasets managed under `derivatives/`
 - `inputs/abide1` and `inputs/abide2` are never modified; all generated content goes into `inputs/abide-both`
-- `derivatives/fmriprep-25.2` is a separate git-annex subdataset with its own remotes
 
 ## Environment setup
 
@@ -192,10 +255,11 @@ micromamba activate datalad
 
 ## SLURM resource defaults
 
-- CPUs: 16, Memory: 64G, Time: 24h (array job) / 12h (first-subject)
+- CPUs: 16, Memory: 64G, Time: 10h
 - Logs: `logs/%x_%A_%a.{out,err}`
 - Clone-per-job pattern: each SLURM task clones superdataset to `$SLURM_TMPDIR`
-- Results pushed to GIN remote, then scratch cleaned up
+- Each job pushes results to the site's GIN repo on a job branch
+- After a batch: reconcile job branches into master per site
 
 ## Code conventions
 
@@ -203,9 +267,8 @@ micromamba activate datalad
 - `build_abide_both.py` supports `--dry-run` for safe testing
 - Shell scripts use `set -euo pipefail`
 - Scripts must be runnable from repo root using relative paths
-- Branch safety: HPC scripts refuse to run on `master`
 - Commit style: conventional prefixes (`enh:`, `fix:`, `doc:`, `chore:`) trending; DataLad auto-commits use `[DATALAD]` prefix
 
 ## cfg_fmriprep.py DataLad procedure
 
-The `code/datalad/cfg_fmriprep.py` script is a DataLad procedure that configures `.gitattributes` for fMRIPrep derivative datasets. It forces metadata formats (JSON, TSV, FreeSurfer text outputs) into git and imaging formats (`.gii`, `.h5`, `.nii.gz`) into annex. Install by symlinking into DataLad's procedures directory.
+The `code/datalad/cfg_fmriprep.py` script is a DataLad procedure that configures `.gitattributes` for fMRIPrep derivative datasets. It forces metadata formats (JSON, TSV, FreeSurfer text outputs) into git and imaging formats (`.gii`, `.h5`, `.nii.gz`) into annex. Applied to each site dataset during creation. Install by symlinking into DataLad's procedures directory.
