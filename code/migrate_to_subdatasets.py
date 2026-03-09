@@ -387,10 +387,13 @@ def cherry_pick_subject(site_path, legacy_path, subject_id, commit_hash,
     if discard:
         print(f"  [INFO] Discarding {len(discard)} shared/unwanted files "
               f"from cherry-pick")
-        # Reset discarded files (handles both staged and unmerged)
+        # Reset discarded files (handles both staged and unmerged).
+        # Use "checkout HEAD --" (not "checkout --") so that unmerged
+        # files get restored to HEAD content instead of keeping
+        # conflict markers in the worktree.
         run(["git", "reset", "HEAD", "--"] + discard,
             cwd=site_path, check=False)
-        run(["git", "checkout", "--"] + discard,
+        run(["git", "checkout", "HEAD", "--"] + discard,
             cwd=site_path, check=False)
         # Clean any untracked files left behind
         subprocess.run(
