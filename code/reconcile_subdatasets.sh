@@ -56,7 +56,7 @@ Options:
   -C <path>              Superdataset root (default: .)
   --site <prefix>        Filter to a site prefix (repeatable, e.g. --site v1s0 --site v2s3)
   --dry-run              Show what would happen without making changes
-  --push                 Push merged master to github (triggers gin via publish-depends)
+  --push                 Push merged master to gin (git + annex) and origin (GitHub, git only)
   --no-delete-branches   Keep merged branches on remote after merging
   --remote <name>        Remote to fetch job branches from (default: gin)
   --logs-dir <path>      SLURM logs directory (default: <root>/logs)
@@ -303,6 +303,14 @@ for SITE_DIR in "${SITE_DIRS[@]}"; do
     warn "$SITE_PREFIX: octopus merge failed — falling back to sequential"
 
     for ref in "${branch_refs[@]}"; do
+      # After merging earlier branches, HEAD may already include this one
+      if git -C "$SITE_DIR" merge-base --is-ancestor "$ref" HEAD 2>/dev/null; then
+        info "$SITE_PREFIX: $ref already incorporated by prior merge"
+        NEWLY_MERGED+=("$ref")
+        (( site_merged++ )) || true
+        continue
+      fi
+
       if git -C "$SITE_DIR" merge --no-edit "$ref" 2>/dev/null; then
         success "$SITE_PREFIX: merged $ref"
         NEWLY_MERGED+=("$ref")
@@ -402,11 +410,18 @@ JSONEOF
 
   # F. Push (if --push)
   if [[ $DO_PUSH -eq 1 && $site_merged -gt 0 ]]; then
-    info "$SITE_PREFIX: pushing to github..."
-    if datalad push -d "$SITE_DIR" --to github 2>/dev/null; then
-      success "$SITE_PREFIX: pushed to github"
+    info "$SITE_PREFIX: pushing to gin (git + annex content)..."
+    if datalad push -d "$SITE_DIR" --to gin --data anything 2>/dev/null; then
+      success "$SITE_PREFIX: pushed to gin"
     else
-      warn "$SITE_PREFIX: datalad push --to github failed"
+      warn "$SITE_PREFIX: datalad push --to gin failed"
+    fi
+
+    info "$SITE_PREFIX: pushing to origin (GitHub, git only)..."
+    if datalad push -d "$SITE_DIR" --to origin 2>/dev/null; then
+      success "$SITE_PREFIX: pushed to origin"
+    else
+      warn "$SITE_PREFIX: datalad push --to origin failed"
     fi
   fi
 
