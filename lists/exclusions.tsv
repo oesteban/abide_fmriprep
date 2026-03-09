@@ -40,4 +40,5 @@ sub-v2s3x28780	abide2	GU_1	3	28780	No BOLD
 sub-v2s3x28781	abide2	GU_1	3	28781	No BOLD
 sub-v2s3x28782	abide2	GU_1	3	28782	No BOLD
 sub-v2s3x28783	abide2	GU_1	3	28783	No BOLD
+sub-v1s20x0050309	abide1	Stanford	20	0050309	FreeSurfer recon-all crash (stack smashing in mris_fix_topology)
 sub-v2s4x29622	abide2	IP_1	4	29622	No BOLD
