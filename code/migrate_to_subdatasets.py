@@ -193,6 +193,26 @@ def inventory_legacy(legacy_path):
     return site_subjects
 
 
+def load_porting_list(tsv_path):
+    """Read a porting-list TSV → dict[site_prefix, list[subject_id]].
+
+    Expected columns: participant_id, site_prefix, source_dataset.
+    The third column (source_dataset) is informational and ignored here.
+    """
+    site_subjects = {}
+    with open(tsv_path) as f:
+        f.readline()  # skip header
+        for line in f:
+            parts = line.strip().split("\t")
+            if len(parts) < 2:
+                continue
+            subject_id, site_prefix = parts[0], parts[1]
+            site_subjects.setdefault(site_prefix, []).append(subject_id)
+    for site in site_subjects:
+        site_subjects[site].sort()
+    return site_subjects
+
+
 def inventory_freesurfer(legacy_path, subject_id):
     """Find FreeSurfer session dirs for a subject in the legacy dataset."""
     prefix = f"{subject_id}_ses-"
@@ -250,7 +270,14 @@ def find_runcmd_commit(legacy_path, subject_id):
 # --------------------------------------------------------------------------
 
 def setup_legacy_remote(site_path, legacy_path, *, dry_run=False):
-    """Add the legacy repo as a git remote and annex remote."""
+    """Add the legacy repo as a git remote.
+
+    The legacy path is a git repo (not a directory special remote).
+    After ``git remote add`` + ``git fetch``, git-annex discovers
+    the remote's UUID from the fetched ``git-annex`` branch and can
+    transfer content directly — no ``initremote`` / ``enableremote``
+    needed.
+    """
     # Check if remote already exists
     try:
         existing = run_capture(
@@ -259,6 +286,8 @@ def setup_legacy_remote(site_path, legacy_path, *, dry_run=False):
         )
         if existing:
             print(f"  [INFO] Legacy remote already configured: {existing}")
+            run(["git", "fetch", "legacy"],
+                cwd=site_path, dry_run=dry_run)
             return
     except subprocess.CalledProcessError:
         pass
@@ -267,29 +296,6 @@ def setup_legacy_remote(site_path, legacy_path, *, dry_run=False):
         cwd=site_path, dry_run=dry_run)
     run(["git", "fetch", "legacy"],
         cwd=site_path, dry_run=dry_run)
-
-    # Check if annex remote already known
-    try:
-        annex_info = run_capture(
-            ["git", "annex", "info"],
-            cwd=site_path,
-        )
-        if "legacy" in annex_info:
-            print("  [INFO] Legacy annex remote already known")
-            return
-    except subprocess.CalledProcessError:
-        pass
-
-    # Try enableremote first (if previously initialized), else initremote
-    try:
-        run(["git", "annex", "enableremote", "legacy"],
-            cwd=site_path, check=True, dry_run=dry_run)
-    except subprocess.CalledProcessError:
-        run(["git", "annex", "initremote", "legacy",
-             "type=directory",
-             f"directory={legacy_path}",
-             "encryption=none"],
-            cwd=site_path, dry_run=dry_run)
 
 
 def cleanup_legacy_remote(site_path, *, dry_run=False):
@@ -322,6 +328,13 @@ def cherry_pick_subject(site_path, legacy_path, subject_id, commit_hash,
                          *, dry_run=False):
     """Cherry-pick a subject's RUNCMD commit, keeping only subject files.
 
+    Cherry-pick will typically conflict on shared files (dataset_description,
+    CITATION, fsaverage, etc.) because those have different base content in
+    the site dataset vs the legacy monolithic dataset.  Subject-specific
+    files (new files) are cleanly staged.  We tolerate conflicts, discard
+    all non-subject paths (staged *and* unmerged), and commit only subject
+    files with the original message/author/timestamp.
+
     Returns True on success, False on failure.
     """
     if dry_run:
@@ -331,7 +344,7 @@ def cherry_pick_subject(site_path, legacy_path, subject_id, commit_hash,
     # Abort any prior interrupted cherry-pick
     abort_cherry_pick(site_path)
 
-    # Cherry-pick --no-commit
+    # Cherry-pick --no-commit.  Conflicts on shared files are EXPECTED.
     result = subprocess.run(
         ["git", "cherry-pick", "--no-commit", commit_hash],
         cwd=site_path,
@@ -339,12 +352,9 @@ def cherry_pick_subject(site_path, legacy_path, subject_id, commit_hash,
         text=True,
     )
     if result.returncode != 0:
-        print(f"  [WARN] Cherry-pick failed for {subject_id}: {result.stderr}")
-        abort_cherry_pick(site_path)
-        reset_dirty_index(site_path)
-        return False
+        print(f"  [INFO] Cherry-pick had conflicts (expected for shared files)")
 
-    # Determine which staged files to keep vs discard
+    # Determine which paths belong to this subject
     fs_dirs = inventory_freesurfer(legacy_path, subject_id)
     keep_prefixes = [
         f"{subject_id}/",
@@ -353,32 +363,38 @@ def cherry_pick_subject(site_path, legacy_path, subject_id, commit_hash,
     for d in fs_dirs:
         keep_prefixes.append(f"sourcedata/freesurfer/{d}/")
 
+    # Collect ALL changed files: staged, modified, and unmerged
     staged = run_capture(
-        ["git", "diff", "--cached", "--name-only"],
+        ["git", "diff", "--cached", "--name-only", "--diff-filter=ACDMR"],
         cwd=site_path,
     ).splitlines()
+    unmerged = run_capture(
+        ["git", "diff", "--name-only", "--diff-filter=U"],
+        cwd=site_path,
+    ).splitlines()
+    all_changed = set(staged + unmerged)
 
     discard = []
-    for path in staged:
-        keep = False
-        for prefix in keep_prefixes:
-            if path == prefix.rstrip("/") or path.startswith(prefix):
-                keep = True
-                break
+    for path in all_changed:
+        if not path:
+            continue
+        keep = any(
+            path == p.rstrip("/") or path.startswith(p) for p in keep_prefixes
+        )
         if not keep:
             discard.append(path)
 
     if discard:
         print(f"  [INFO] Discarding {len(discard)} shared/unwanted files "
               f"from cherry-pick")
-        # Unstage and restore discarded files
+        # Reset discarded files (handles both staged and unmerged)
         run(["git", "reset", "HEAD", "--"] + discard,
             cwd=site_path, check=False)
         run(["git", "checkout", "--"] + discard,
             cwd=site_path, check=False)
         # Clean any untracked files left behind
         subprocess.run(
-            ["git", "clean", "-fd"] + discard,
+            ["git", "clean", "-fd", "--"] + discard,
             cwd=site_path, capture_output=True,
         )
 
@@ -453,6 +469,11 @@ def main():
         help="Path to the legacy monolithic derivatives dataset",
     )
     parser.add_argument(
+        "--porting-list", default=None,
+        help="TSV file with columns: participant_id, site_prefix, source_dataset. "
+             "Overrides Phase 0/1 (no inventory or submission-list check).",
+    )
+    parser.add_argument(
         "--site", default=None,
         help="Migrate only a single site (e.g., v1s0)",
     )
@@ -501,12 +522,18 @@ def main():
     print("Phase 1: Inventory")
     print("=" * 60)
 
-    site_subjects = inventory_legacy(legacy_path)
+    if args.porting_list:
+        # --porting-list supersedes legacy inventory and Phase 0 checks
+        print(f"[INFO] Loading porting list: {args.porting_list}")
+        site_subjects = load_porting_list(args.porting_list)
+    else:
+        site_subjects = inventory_legacy(legacy_path)
 
     # Filter by --site
     if args.site:
         if args.site not in site_subjects:
-            print(f"[FATAL] Site {args.site} not found in legacy dataset",
+            print(f"[FATAL] Site {args.site} not found in "
+                  f"{'porting list' if args.porting_list else 'legacy dataset'}",
                   file=sys.stderr)
             sys.exit(1)
         site_subjects = {args.site: site_subjects[args.site]}
@@ -518,11 +545,13 @@ def main():
             subject_id = f"sub-{subject_id}"
         site_prefix = extract_site_prefix(subject_id)
         if site_prefix not in site_subjects:
-            print(f"[FATAL] Site {site_prefix} not found in legacy dataset",
+            print(f"[FATAL] Site {site_prefix} not found in "
+                  f"{'porting list' if args.porting_list else 'legacy dataset'}",
                   file=sys.stderr)
             sys.exit(1)
         if subject_id not in site_subjects[site_prefix]:
-            print(f"[FATAL] Subject {subject_id} not found in legacy dataset "
+            print(f"[FATAL] Subject {subject_id} not found in "
+                  f"{'porting list' if args.porting_list else 'legacy dataset'} "
                   f"(site {site_prefix})", file=sys.stderr)
             sys.exit(1)
         site_subjects = {site_prefix: [subject_id]}
@@ -548,41 +577,48 @@ def main():
     # =====================================================================
     # Phase 0 — Identify subjects submitted (and already processed)
     # =====================================================================
-    # Subjects in the active submission list (lists/curnagl-*.txt) must not
-    # be ported.  They are either:
-    #   - already re-processed and merged into site datasets, or
-    #   - currently running / awaiting merge on job branches.
-    # Porting them would create conflicts with the sbatch workflow.
-    print("\n" + "=" * 60)
-    print("Phase 0: Identify submitted subjects")
-    print("=" * 60)
-
-    phase0 = identify_submitted_subjects(project_root, deriv_path,
-                                          site_subjects)
-    submitted = phase0["submitted"]
-    merged = phase0["merged"]
-    running = phase0["running"]
-    list_file = phase0["list_file"]
-
-    if list_file:
-        print(f"\n[INFO] Submission list: {list_file}")
-        print(f"[INFO] Total submitted subjects: {len(submitted)}")
-
-        # Count overlap with legacy inventory
-        all_legacy = set()
-        for subs in site_subjects.values():
-            all_legacy.update(subs)
-        overlap = submitted & all_legacy
-
-        print(f"[INFO] Overlap with legacy inventory: {len(overlap)}")
-        print(f"[INFO]   Already merged into site datasets: {len(merged)}")
-        print(f"[INFO]   Running / job branch exists: {len(running)}")
-        print(f"[INFO]   Pending (not yet started or no branch): "
-              f"{len(overlap) - len(merged) - len(running)}")
-        print(f"[INFO] All {len(overlap)} overlapping subjects will be "
-              f"EXCLUDED from migration")
+    if args.porting_list:
+        # --porting-list already excludes submitted subjects; skip Phase 0
+        print("\n" + "=" * 60)
+        print("Phase 0: Skipped (--porting-list provided)")
+        print("=" * 60)
+        submitted = set()
     else:
-        print("\n[INFO] No submission list found — no automatic exclusions")
+        # Subjects in the active submission list (lists/curnagl-*.txt) must not
+        # be ported.  They are either:
+        #   - already re-processed and merged into site datasets, or
+        #   - currently running / awaiting merge on job branches.
+        # Porting them would create conflicts with the sbatch workflow.
+        print("\n" + "=" * 60)
+        print("Phase 0: Identify submitted subjects")
+        print("=" * 60)
+
+        phase0 = identify_submitted_subjects(project_root, deriv_path,
+                                              site_subjects)
+        submitted = phase0["submitted"]
+        merged = phase0["merged"]
+        running = phase0["running"]
+        list_file = phase0["list_file"]
+
+        if list_file:
+            print(f"\n[INFO] Submission list: {list_file}")
+            print(f"[INFO] Total submitted subjects: {len(submitted)}")
+
+            # Count overlap with legacy inventory
+            all_legacy = set()
+            for subs in site_subjects.values():
+                all_legacy.update(subs)
+            overlap = submitted & all_legacy
+
+            print(f"[INFO] Overlap with legacy inventory: {len(overlap)}")
+            print(f"[INFO]   Already merged into site datasets: {len(merged)}")
+            print(f"[INFO]   Running / job branch exists: {len(running)}")
+            print(f"[INFO]   Pending (not yet started or no branch): "
+                  f"{len(overlap) - len(merged) - len(running)}")
+            print(f"[INFO] All {len(overlap)} overlapping subjects will be "
+                  f"EXCLUDED from migration")
+        else:
+            print("\n[INFO] No submission list found — no automatic exclusions")
 
     # =====================================================================
     # Phase 2 — Map subjects to RUNCMD commits
