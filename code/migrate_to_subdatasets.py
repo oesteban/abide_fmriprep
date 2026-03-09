@@ -387,19 +387,31 @@ def cherry_pick_subject(site_path, legacy_path, subject_id, commit_hash,
     if discard:
         print(f"  [INFO] Discarding {len(discard)} shared/unwanted files "
               f"from cherry-pick")
-        # Reset discarded files (handles both staged and unmerged).
-        # Use "checkout HEAD --" (not "checkout --") so that unmerged
-        # files get restored to HEAD content instead of keeping
-        # conflict markers in the worktree.
+        # Unstage all discarded files first
         run(["git", "reset", "HEAD", "--"] + discard,
             cwd=site_path, check=False)
-        run(["git", "checkout", "HEAD", "--"] + discard,
-            cwd=site_path, check=False)
-        # Clean any untracked files left behind
-        subprocess.run(
-            ["git", "clean", "-fd", "--"] + discard,
-            cwd=site_path, capture_output=True,
-        )
+
+        # Split discard list: files that exist in HEAD can be restored
+        # with checkout; files that are new (not in HEAD) must be cleaned.
+        # Running checkout HEAD on files not in HEAD fails silently with
+        # check=False but skips restoration of files that DO exist.
+        in_head = run_capture(
+            ["git", "ls-tree", "--name-only", "-r", "HEAD"],
+            cwd=site_path,
+        ).splitlines()
+        in_head_set = set(in_head)
+
+        restore = [f for f in discard if f in in_head_set]
+        remove = [f for f in discard if f not in in_head_set]
+
+        if restore:
+            run(["git", "checkout", "HEAD", "--"] + restore,
+                cwd=site_path, check=False)
+        if remove:
+            subprocess.run(
+                ["git", "clean", "-fd", "--"] + remove,
+                cwd=site_path, capture_output=True,
+            )
 
     # Check we still have something staged
     remaining = run_capture(
