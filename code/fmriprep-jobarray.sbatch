@@ -155,6 +155,7 @@ CIFTI_DENSITY="91k"
 OUTPUT_LAYOUT="bids"
 SKIP_BIDS_VALIDATION=1
 ANAT_ONLY=0
+IGNORE_SLICETIMING=0
 
 usage() {
   cat <<EOF
@@ -184,6 +185,7 @@ Optional:
   --cifti-density 91k|170k (default: 91k)
   --skip-bids-validation 0|1 (default: 1)
   --anat-only              (run only anatomical processing)
+  --ignore-slicetiming     (pass --ignore slicetiming to fMRIPrep)
 EOF
 }
 
@@ -203,6 +205,7 @@ while [[ $# -gt 0 ]]; do
     --cifti-density) CIFTI_DENSITY="$2"; shift 2 ;;
     --skip-bids-validation) SKIP_BIDS_VALIDATION="$2"; shift 2 ;;
     --anat-only) ANAT_ONLY=1; shift ;;
+    --ignore-slicetiming) IGNORE_SLICETIMING=1; shift ;;
     -h|--help) usage; exit 0 ;;
     *) die "Unknown arg: $1" ;;
   esac
@@ -440,6 +443,12 @@ if [[ "$ANAT_ONLY" == "1" ]]; then
   echo "[INFO] Running in anat-only mode"
 fi
 
+IGNORE_STC_FLAG=""
+if [[ "$IGNORE_SLICETIMING" == "1" ]]; then
+  IGNORE_STC_FLAG="--ignore slicetiming"
+  echo "[INFO] Ignoring slice timing correction"
+fi
+
 # Remove stale fsaverage from cloned site dataset.
 # When the site dataset is cloned, label files (git-tracked) are real but surf files
 # (annex) are broken symlinks. BIDSFreeSurferDir's marker check passes on the label
@@ -490,6 +499,7 @@ datalad containers-run -n "$CONTAINER_NAME" \
     --participant-label "$SUBJECT" \
     $BIDSVAL_FLAG \
     $ANAT_ONLY_FLAG \
+    $IGNORE_STC_FLAG \
     --output-layout "$OUTPUT_LAYOUT" \
     --fs-license-file /fs/license.txt \
     --cifti-output "$CIFTI_DENSITY" \
