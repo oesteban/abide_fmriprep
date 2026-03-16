@@ -230,6 +230,25 @@ Each SLURM job processes one subject and pushes results to the subject's site da
 
 One repo per site: `abide-fmriprep/v1s0`, `abide-fmriprep/v1s1`, ..., `abide-fmriprep/v2s18`.
 
+### Known gotcha: GIN annex UUID mismatch
+
+When site datasets are created locally and then pushed to GIN, the GIN server assigns its own git-annex UUID — distinct from the UUID stored in the local `git config remote.gin.annex-uuid`. Content pushed from HPC compute nodes goes through GIN, so location tracking records the **server's** UUID. But the local clone retains the **stale** UUID from initial setup. This causes `datalad get` to fail: git-annex knows content exists at the server UUID but has no configured remote mapped to it.
+
+**Diagnosis:** `git annex info` shows two entries for GIN — one labelled `gin` (wrong UUID from git config) and one with the server path `/data/repos/abide-fmriprep/<site>.git` (correct UUID). `git annex whereis` on any file shows the server UUID, not the `gin` remote UUID.
+
+**Fix per site:**
+```bash
+# Fetch the git-annex branch (carries the server's UUID in location tracking)
+git -C derivatives/<site> fetch gin git-annex
+git -C derivatives/<site> annex merge
+# Extract the actual GIN server UUID
+gin_uuid=$(git -C derivatives/<site> annex info | grep '/data/repos/abide-fmriprep/' | head -1 | awk '{print $1}')
+# Update the local config
+git -C derivatives/<site> config remote.gin.annex-uuid "$gin_uuid"
+```
+
+**Prevention:** The overlay build script (`code/build_derivatives_overlay.py`) now reads GIN UUIDs from the overlay's own remote config (populated by `initremote type=git`, which auto-discovers the correct UUID) rather than from the site subdataset's potentially stale config.
+
 ## DataLad / git-annex conventions
 
 - All files use `MD5E` annex backend (root `.gitattributes`)

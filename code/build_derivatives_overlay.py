@@ -515,12 +515,12 @@ def prepend_changes(
 # GIN remote configuration
 # ---------------------------------------------------------------------------
 
-def get_gin_annex_uuid(site_dir: Path) -> Optional[str]:
-    """Get the git-annex UUID of the 'gin' remote in a site dataset."""
+def _get_git_config(repo_dir: Path, key: str) -> Optional[str]:
+    """Read a single git-config value, returning *None* on miss."""
     try:
         out = subprocess.run(
-            _wrap(["git", "config", "--get", "remote.gin.annex-uuid"]),
-            cwd=str(site_dir),
+            _wrap(["git", "config", "--get", key]),
+            cwd=str(repo_dir),
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             text=True,
@@ -529,6 +529,11 @@ def get_gin_annex_uuid(site_dir: Path) -> Optional[str]:
         return out if out else None
     except subprocess.CalledProcessError:
         return None
+
+
+def get_gin_annex_uuid(site_dir: Path) -> Optional[str]:
+    """Get the git-annex UUID of the 'gin' remote in a site dataset."""
+    return _get_git_config(site_dir, "remote.gin.annex-uuid")
 
 
 def register_gin_remote(
@@ -936,8 +941,8 @@ def parse_args() -> argparse.Namespace:
         default=None,
         help=(
             "Overlay dataset path relative to project root "
-            "(default: derivatives/derivatives-fmriprep or "
-            "derivatives/derivatives-freesurfer based on --mode)."
+            "(default: derivatives/fmriprep-25.2 or "
+            "derivatives/freesurfer based on --mode)."
         ),
     )
     parser.add_argument(
@@ -992,9 +997,9 @@ def main() -> None:
     if args.overlay_path:
         overlay_path = Path(args.overlay_path)
     elif args.mode == "freesurfer":
-        overlay_path = Path("derivatives/derivatives-freesurfer")
+        overlay_path = Path("derivatives/freesurfer")
     else:
-        overlay_path = Path("derivatives/derivatives-fmriprep")
+        overlay_path = Path("derivatives/fmriprep-25.2")
 
     overlay_dir = project_root / overlay_path
 
@@ -1037,10 +1042,20 @@ def main() -> None:
             success(f"  {site_prefix}: registered (UUID={uuid[:8]}...)")
 
     # --- Phase: Collect GIN UUIDs for setpresentkey ---
+    # Prefer UUIDs from the overlay's own remote config (set by initremote,
+    # which auto-discovers the actual GIN server UUID).  Fall back to the
+    # site subdataset's config only when the overlay remote doesn't exist.
     gin_uuids: Dict[str, Optional[str]] = {}
     for site_prefix in site_prefixes:
-        site_dir = project_root / "derivatives" / site_prefix
-        gin_uuids[site_prefix] = get_gin_annex_uuid(site_dir)
+        remote_name = f"gin-{site_prefix}"
+        overlay_uuid = _get_git_config(
+            overlay_dir, f"remote.{remote_name}.annex-uuid"
+        )
+        if overlay_uuid:
+            gin_uuids[site_prefix] = overlay_uuid
+        else:
+            site_dir = project_root / "derivatives" / site_prefix
+            gin_uuids[site_prefix] = get_gin_annex_uuid(site_dir)
 
     # --- Phase: Load site lookup ---
     site_lookup = load_site_lookup(project_root)
