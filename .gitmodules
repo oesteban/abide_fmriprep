@@ -194,5 +194,5 @@
 	datalad-id = 16eacecc-b5dd-45cb-b9ba-779b18e5ff60
 [submodule "derivatives/fmriprep-25.2"]
 	path = derivatives/fmriprep-25.2
-	url = ./derivatives/fmriprep-25.2
+	url = https://github.com/abide-fmriprep/fmriprep-25.2.git
 	datalad-id = 472af0da-cba0-4023-83cc-3f291b92db37
