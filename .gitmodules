@@ -192,7 +192,7 @@
 	path = derivatives/v2s9
 	url = https://github.com/abide-fmriprep/v2s9.git
 	datalad-id = 16eacecc-b5dd-45cb-b9ba-779b18e5ff60
-[submodule "derivatives/derivatives-fmriprep"]
-	path = derivatives/derivatives-fmriprep
-	url = ./derivatives/derivatives-fmriprep
+[submodule "derivatives/fmriprep-25.2"]
+	path = derivatives/fmriprep-25.2
+	url = ./derivatives/fmriprep-25.2
 	datalad-id = 472af0da-cba0-4023-83cc-3f291b92db37
