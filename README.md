@@ -15,10 +15,10 @@ YODA (“Yoda's Organigram on Data Analysis”) is introduced
 - `env/` for environment specification and local-only secrets
 
 ## Inputs and data sources
-- `inputs/abide1` (ABIDE I RawDataBIDS)
-- `inputs/abide2` (ABIDE II RawData)
-- `inputs/abide-both` (merged BIDS view, self-contained git-annex dataset; normalized layout + registered web URLs)
-- `inputs/templateflow` (TemplateFlow subdatasets)
+- [`inputs/abide1`](https://datasets.datalad.org/abide/RawDataBIDS/) (ABIDE I RawDataBIDS)
+- [`inputs/abide2`](https://datasets.datalad.org/abide2/RawData/) (ABIDE II RawData)
+- [`inputs/abide-both`](https://github.com/oesteban/abide-merged) (merged BIDS view, self-contained git-annex dataset; normalized layout + registered web URLs)
+- [`inputs/templateflow`](https://github.com/templateflow/templateflow) (TemplateFlow subdatasets)
 
 ## Prerequisites
 
@@ -346,6 +346,14 @@ dataset (see `inputs/abide-both/participants.tsv`). Outputs keep these IDs
 directly (no post-run rename).
 
 ## Derivatives and provenance
-- Canonical output dataset: `derivatives/fmriprep-25.2`
+- Merged overlay dataset: [`derivatives/fmriprep-25.2`](https://github.com/abide-fmriprep/fmriprep-25.2) (all 2,148 subjects; annex content on GIN)
+- 43 per-site derivative datasets under [`abide-fmriprep`](https://github.com/abide-fmriprep) on GitHub:
+  `derivatives/v1s0/` ... `derivatives/v1s23/` (ABIDE I) and
+  `derivatives/v2s0/` ... `derivatives/v2s18/` (ABIDE II).
+  Annex content stored on [GIN](https://gin.g-node.org/abide-fmriprep).
 - All executions use `datalad containers-run` for provenance
 - The SLURM script pushes to the `gin` remote by default
+
+## Other subdatasets
+- [`logs/`](https://github.com/oesteban/abide-fmriprep-derivatives-logs) (SLURM output logs)
+- [`docs/paper/`](https://github.com/oesteban/abide-paper) (LaTeX manuscript)
