@@ -43,4 +43,5 @@ sub-v2s3x28783	abide2	GU_1	3	28783	No BOLD
 sub-v1s20x0050309	abide1	Stanford	20	0050309	FreeSurfer recon-all crash (stack smashing in mris_fix_topology)
 sub-v2s4x29622	abide2	IP_1	4	29622	No BOLD
 sub-v1s23x0050616	abide1	Yale	23	0050616	FreeSurfer recon-all crash (mris_remesh segfault)
+sub-v2s11x28693	abide2	ONRC_2	11	28693	FreeSurfer recon-all crash (stack smashing in mris_fix_topology)
 sub-v2s11x28697	abide2	ONRC_2	11	28697	FreeSurfer Talairach alignment failure
