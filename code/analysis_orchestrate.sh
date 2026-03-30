@@ -76,7 +76,7 @@ for site in $SITES; do
 
     while IFS= read -r sub; do
         # Get the selected run from qc_prescreen.tsv (may include acq- entity, e.g. "acq-pedj_run-1")
-        run=$(awk -F'\t' -v sub="$sub" 'NR>1 && $1==sub { print $5 }' "$QC_TSV")
+        run=$(awk -F'\t' -v sid="$sub" 'NR>1 && $1==sid { print $5 }' "$QC_TSV")
         bold_pattern="${sub}/ses-1/func/${sub}_ses-1_task-rest_${run}_space-MNI152NLin2009cAsym_desc-preproc_bold.nii.gz"
         mask_pattern="${sub}/ses-1/func/${sub}_ses-1_task-rest_${run}_space-MNI152NLin2009cAsym_desc-brain_mask.nii.gz"
         bold_json="${sub}/ses-1/func/${sub}_ses-1_task-rest_${run}_space-MNI152NLin2009cAsym_desc-preproc_bold.json"
@@ -108,7 +108,7 @@ for site in $SITES; do
     cd "$FMRIPREP_DIR"
     while IFS= read -r sub; do
         # selected_run may include acq- entity
-        run=$(awk -F'\t' -v sub="$sub" 'NR>1 && $1==sub { print $5 }' "$QC_TSV")
+        run=$(awk -F'\t' -v sid="$sub" 'NR>1 && $1==sid { print $5 }' "$QC_TSV")
         bold_pattern="${sub}/ses-1/func/${sub}_ses-1_task-rest_${run}_space-MNI152NLin2009cAsym_desc-preproc_bold.nii.gz"
         mask_pattern="${sub}/ses-1/func/${sub}_ses-1_task-rest_${run}_space-MNI152NLin2009cAsym_desc-brain_mask.nii.gz"
         datalad drop "$bold_pattern" "$mask_pattern" 2>/dev/null || true
