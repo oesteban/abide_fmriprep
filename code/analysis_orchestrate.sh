@@ -13,8 +13,12 @@ set -euo pipefail
 # Prerequisites:
 #   - Pre-screen QC completed (derivatives/connectivity/qc_prescreen.tsv)
 #   - micromamba env 'abide-analysis' installed
-#   - micromamba env 'datalad' installed (for datalad get/drop)
+#   - fmriprep env with datalad/git-annex available
 # -------------------------------------------------------------------
+
+# Environment paths (Curnagl)
+DATALAD_ENV="/work/FAC/FBM/DNF/oesteban/hcph/opt/mamba/envs/fmriprep/bin"
+ANALYSIS_ENV="/work/FAC/FBM/DNF/oesteban/hcph/opt/mamba/envs/abide-analysis/bin"
 
 PROJECT_ROOT=""
 
@@ -68,8 +72,7 @@ for site in $SITES; do
 
     # 2. Stage BOLD data from GIN
     echo "  Staging BOLD data..."
-    eval "$(micromamba shell hook -s bash)"
-    micromamba activate datalad
+    export PATH="$DATALAD_ENV:$PATH"
 
     while IFS= read -r sub; do
         # Get the selected run from qc_prescreen.tsv (may include acq- entity, e.g. "acq-pedj_run-1")
@@ -85,7 +88,6 @@ for site in $SITES; do
 
     # 3. Submit array job
     echo "  Submitting SLURM array job..."
-    micromamba activate abide-analysis  # for sbatch submission
 
     JOB_ID=$(sbatch --parsable \
         --array="1-${N_SUBJECTS}" \
@@ -103,7 +105,6 @@ for site in $SITES; do
 
     # 5. Drop BOLD data to reclaim scratch
     echo "  Dropping BOLD data for site $site..."
-    micromamba activate datalad
     cd "$FMRIPREP_DIR"
     while IFS= read -r sub; do
         # selected_run may include acq- entity

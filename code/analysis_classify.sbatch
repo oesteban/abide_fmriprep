@@ -30,9 +30,8 @@ if [[ -z "$PROJECT_ROOT" ]]; then
     exit 1
 fi
 
-# Activate analysis environment
-eval "$(micromamba shell hook -s bash)"
-micromamba activate abide-analysis
+# Activate analysis environment (Curnagl: PATH-based)
+export PATH=/work/FAC/FBM/DNF/oesteban/hcph/opt/mamba/envs/abide-analysis/bin:$PATH
 
 echo "=== Build connectomes ==="
 echo "Project root: $PROJECT_ROOT"
