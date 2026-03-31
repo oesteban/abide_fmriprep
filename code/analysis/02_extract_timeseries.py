@@ -150,6 +150,30 @@ def extract_timeseries(
         demean=True,
     )
 
+    # Compute high-variance voxel confounds (Abraham et al. 2017, Section 2.3:
+    # "the first 5 principal components of the 2% voxels with highest variance")
+    from nilearn.signal import high_variance_confounds
+    bold_img = nib.load(str(bold))
+    mask_img = nib.load(str(mask))
+    bold_data = bold_img.get_fdata()
+    mask_data = mask_img.get_fdata().astype(bool)
+    # Extract masked voxel time series: (T, n_voxels)
+    voxel_ts = bold_data[mask_data].T
+    if sample_mask is not None:
+        voxel_ts = voxel_ts[sample_mask]
+    hv_confounds = high_variance_confounds(
+        voxel_ts, n_confounds=5, percentile=2.0
+    )
+    # Combine fMRIPrep confounds + high-variance confounds
+    hv_df = pd.DataFrame(
+        hv_confounds,
+        columns=[f"hv_comp_{i:02d}" for i in range(hv_confounds.shape[1])],
+        index=confounds.index if sample_mask is None else confounds.index[sample_mask],
+    )
+    confounds_combined = pd.concat([confounds, hv_df], axis=1)
+    # Free the 4D array
+    del bold_data, voxel_ts
+
     # Extract time series
     masker = NiftiMapsMasker(
         maps_img=atlas.maps,
@@ -160,7 +184,7 @@ def extract_timeseries(
         t_r=tr,
     )
     timeseries = masker.fit_transform(
-        str(bold), confounds=confounds, sample_mask=sample_mask
+        str(bold), confounds=confounds_combined, sample_mask=sample_mask
     )  # shape: (T_usable, 39)
 
     # Compute per-subject Pearson correlation
@@ -182,7 +206,7 @@ def extract_timeseries(
         "NumberOfVolumesDiscarded": int(confounds.shape[0] - timeseries.shape[0]) if sample_mask is not None else 0,
         "Atlas": "MSDL",
         "NumberOfRegions": N_MSDL_REGIONS,
-        "ConfoundStrategy": list(CONFOUND_STRATEGY),
+        "ConfoundStrategy": list(CONFOUND_STRATEGY) + ["high_variance"],
         "ConfoundMotion": CONFOUND_MOTION,
         "ConfoundCompCor": CONFOUND_COMPCOR,
         "ConfoundNCompCor": CONFOUND_N_COMPCOR,
