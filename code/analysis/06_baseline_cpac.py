@@ -98,15 +98,11 @@ def extract_cpac_timeseries(data_dir: str | None = None):
     subject_ids = []
     skipped = 0
 
-    # phenotypic is a numpy recarray -- access columns by name
-    dx_groups = phenotypic["DX_GROUP"]
-    site_ids = phenotypic["SITE_ID"]
-    sub_ids = phenotypic["SUB_ID"]
-
+    # phenotypic is a pandas DataFrame -- use .iloc for positional access
     for i, func in enumerate(func_files):
-        dx = int(dx_groups[i])
-        site = str(site_ids[i])
-        sub_id = str(sub_ids[i])
+        dx = int(phenotypic["DX_GROUP"].iloc[i])
+        site = str(phenotypic["SITE_ID"].iloc[i])
+        sub_id = str(phenotypic["SUB_ID"].iloc[i])
 
         if dx not in (1, 2):
             skipped += 1
