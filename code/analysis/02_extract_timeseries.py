@@ -181,17 +181,17 @@ def extract_timeseries(
     timeseries = masker.fit_transform(bold_clean)
 
     # Stage 2b: regress tCompCor from ROI signals (Abraham Section 2.3)
-    confounds_stage2, _ = load_confounds(
-        str(bold),
-        strategy=("compcor",),
-        compcor="temporal",
-        n_compcor=CONFOUND_N_COMPCOR,
-        demean=True,
-    )
+    # Read tCompCor columns directly from fMRIPrep's confounds TSV
+    # (load_confounds requires high_pass with compcor, which we don't want here)
+    confounds_tsv = pd.read_csv(conf_path, sep="\t")
+    tcompcor_cols = [c for c in confounds_tsv.columns if c.startswith("t_comp_cor_")]
+    tcompcor_cols = sorted(tcompcor_cols)[:CONFOUND_N_COMPCOR]
+    confounds_stage2 = confounds_tsv[tcompcor_cols].values
+
     from nilearn.signal import clean
     timeseries = clean(
         timeseries,
-        confounds=confounds_stage2.values,
+        confounds=confounds_stage2,
         detrend=False,
         standardize="zscore_sample",
     )
