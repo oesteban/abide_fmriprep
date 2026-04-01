@@ -109,6 +109,7 @@ def extract_cpac_timeseries(data_dir: str | None = None):
         print(f"  Downloaded {len(func_files)} subjects")
 
     atlas = fetch_atlas_msdl()
+    print(f"  MSDL atlas loaded ({len(atlas.labels)} regions)", flush=True)
 
     # Extract time series -- C-PAC data is already denoised, so no confounds needed
     # Abraham used standardize=True, detrend=True, low_pass/high_pass already applied by C-PAC
@@ -126,7 +127,7 @@ def extract_cpac_timeseries(data_dir: str | None = None):
     subject_ids = []
     skipped = 0
 
-    # phenotypic is a pandas DataFrame -- use .iloc for positional access
+    print(f"  Extracting time series from {len(func_files)} subjects...", flush=True)
     for i, func in enumerate(func_files):
         dx = int(phenotypic["DX_GROUP"].iloc[i])
         site = str(phenotypic["SITE_ID"].iloc[i])
@@ -146,11 +147,12 @@ def extract_cpac_timeseries(data_dir: str | None = None):
             sites.append(site)
             subject_ids.append(sub_id)
         except Exception as e:
-            print(f"  WARNING: subject {sub_id} failed: {e}")
+            print(f"  WARNING: subject {sub_id} failed: {e}", flush=True)
             skipped += 1
 
-        if (i + 1) % 100 == 0:
-            print(f"  Processed {i + 1}/{len(func_files)}")
+        if (i + 1) % 50 == 0:
+            print(f"  Processed {i + 1}/{len(func_files)} "
+                  f"(extracted: {len(timeseries_list)}, skipped: {skipped})", flush=True)
 
     print(f"  Extracted: {len(timeseries_list)}, skipped: {skipped}")
     return timeseries_list, np.array(labels), np.array(sites), subject_ids
