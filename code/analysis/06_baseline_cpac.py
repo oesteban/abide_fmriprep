@@ -98,10 +98,15 @@ def extract_cpac_timeseries(data_dir: str | None = None):
     subject_ids = []
     skipped = 0
 
-    for i, (func, pheno) in enumerate(zip(func_files, phenotypic)):
-        dx = pheno["DX_GROUP"]
-        site = pheno["SITE_ID"]
-        sub_id = str(pheno["SUB_ID"])
+    # phenotypic is a numpy recarray -- access columns by name
+    dx_groups = phenotypic["DX_GROUP"]
+    site_ids = phenotypic["SITE_ID"]
+    sub_ids = phenotypic["SUB_ID"]
+
+    for i, func in enumerate(func_files):
+        dx = int(dx_groups[i])
+        site = str(site_ids[i])
+        sub_id = str(sub_ids[i])
 
         if dx not in (1, 2):
             skipped += 1
