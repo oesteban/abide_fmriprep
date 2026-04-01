@@ -79,7 +79,7 @@ def extract_cpac_timeseries(data_dir: str | None = None):
         print(f"Loading cached PCP data from {cache_dir}")
         phenotypic = pd.read_csv(phenotypic_path)
         # Filter to quality-checked subjects (same as fetch_abide_pcp quality_checked=True)
-        phenotypic = phenotypic[phenotypic["func_preproc"] == 1].reset_index(drop=True)
+        phenotypic = phenotypic[phenotypic["func_quality"] == 1].reset_index(drop=True)
 
         func_files = []
         pheno_keep = []
