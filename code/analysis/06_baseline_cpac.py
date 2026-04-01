@@ -64,21 +64,49 @@ def extract_cpac_timeseries(data_dir: str | None = None):
 
     Uses the same parameters as Abraham: band_pass_filtering=True
     (C-PAC already applied 0.01-0.1 Hz), quality_checked=True.
-    """
-    print("Fetching ABIDE PCP (C-PAC, func_preproc)...")
-    abide = fetch_abide_pcp(
-        data_dir=data_dir,
-        pipeline="cpac",
-        band_pass_filtering=True,
-        global_signal_regression=False,
-        derivatives=["func_preproc"],
-        quality_checked=True,
-        verbose=1,
-    )
 
-    func_files = abide.func_preproc
-    phenotypic = abide.phenotypic
-    print(f"  Downloaded {len(func_files)} subjects")
+    If data is already cached, loads directly from disk to avoid
+    nilearn's slow re-verification of all 871 files.
+    """
+    import glob
+    import pandas as pd
+
+    cache_dir = Path(data_dir or Path.home() / "nilearn_data") / "ABIDE_pcp" / "cpac" / "filt_noglobal"
+    phenotypic_path = Path(data_dir or Path.home() / "nilearn_data") / "ABIDE_pcp" / "Phenotypic_V1_0b_preprocessed1.csv"
+
+    if cache_dir.is_dir() and phenotypic_path.exists():
+        # Load from cache directly (skip nilearn's slow re-verification)
+        print(f"Loading cached PCP data from {cache_dir}")
+        phenotypic = pd.read_csv(phenotypic_path)
+        # Filter to quality-checked subjects (same as fetch_abide_pcp quality_checked=True)
+        phenotypic = phenotypic[phenotypic["func_preproc"] == 1].reset_index(drop=True)
+
+        func_files = []
+        pheno_keep = []
+        for _, row in phenotypic.iterrows():
+            site = row["SITE_ID"]
+            sub = row["SUB_ID"]
+            fpath = cache_dir / f"{site}_{sub}_func_preproc.nii.gz"
+            if fpath.exists():
+                func_files.append(str(fpath))
+                pheno_keep.append(row)
+        phenotypic = pd.DataFrame(pheno_keep).reset_index(drop=True)
+        print(f"  Found {len(func_files)} cached subjects")
+    else:
+        # First-time download via nilearn
+        print("Fetching ABIDE PCP (C-PAC, func_preproc)...")
+        abide = fetch_abide_pcp(
+            data_dir=data_dir,
+            pipeline="cpac",
+            band_pass_filtering=True,
+            global_signal_regression=False,
+            derivatives=["func_preproc"],
+            quality_checked=True,
+            verbose=1,
+        )
+        func_files = abide.func_preproc
+        phenotypic = abide.phenotypic
+        print(f"  Downloaded {len(func_files)} subjects")
 
     atlas = fetch_atlas_msdl()
 
