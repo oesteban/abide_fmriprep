@@ -78,20 +78,20 @@ def extract_cpac_timeseries(data_dir: str | None = None):
         # Load from cache directly (skip nilearn's slow re-verification)
         print(f"Loading cached PCP data from {cache_dir}")
         phenotypic = pd.read_csv(phenotypic_path)
-        # Filter to quality-checked subjects (same as fetch_abide_pcp quality_checked=True)
-        phenotypic = phenotypic[phenotypic["func_quality"] == 1].reset_index(drop=True)
 
+        # Build a lookup from (SITE_ID, SUB_ID) -> row index
+        # SUB_ID in the CSV is numeric; filenames are zero-padded to 7 digits
         func_files = []
         pheno_keep = []
         for _, row in phenotypic.iterrows():
-            site = row["SITE_ID"]
-            sub = row["SUB_ID"]
+            site = str(row["SITE_ID"])
+            sub = str(int(row["SUB_ID"])).zfill(7)
             fpath = cache_dir / f"{site}_{sub}_func_preproc.nii.gz"
             if fpath.exists():
                 func_files.append(str(fpath))
                 pheno_keep.append(row)
         phenotypic = pd.DataFrame(pheno_keep).reset_index(drop=True)
-        print(f"  Found {len(func_files)} cached subjects")
+        print(f"  Found {len(func_files)} cached subjects (quality-checked by initial download)")
     else:
         # First-time download via nilearn
         print("Fetching ABIDE PCP (C-PAC, func_preproc)...")
