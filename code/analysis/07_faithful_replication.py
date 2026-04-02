@@ -89,44 +89,69 @@ CV_SPLITS_URL = "https://team.inria.fr/parietal/files/2016/04/cv_abide.zip"
 def fetch_abraham_cv_splits(data_dir: Path | None = None) -> dict:
     """Download and parse Abraham's 10-fold CV splits.
 
-    Returns a dict mapping subject_id (int) -> fold_index (0-9).
+    The file is a wide CSV with columns: subsamble, then pairs of
+    (train, test) columns for each fold and CV scheme. We extract the
+    ``folds_loso`` columns (inter-site leave-one-site-out, 10 folds).
+
+    Returns a dict mapping subject_id (int) -> fold_index (0-9),
+    where fold_index is the fold in which the subject is in the TEST set.
     """
     cache_path = (data_dir or Path.home() / "nilearn_data") / "cv_abide"
+    csv_path = cache_path / "cv_abide.csv"
 
-    if cache_path.is_dir() and any(cache_path.iterdir()):
-        print("  CV splits already cached.", flush=True)
-    else:
+    if not csv_path.exists():
         print(f"  Downloading CV splits from {CV_SPLITS_URL}...", flush=True)
         cache_path.mkdir(parents=True, exist_ok=True)
         response = urlopen(CV_SPLITS_URL)
-        with zipfile.ZipFile(io.BytesIO(response.read())) as zf:
-            zf.extractall(cache_path)
+        # The URL serves a CSV directly (despite .zip extension in some references)
+        data = response.read()
+        # Try zip first, fall back to raw CSV
+        try:
+            with zipfile.ZipFile(io.BytesIO(data)) as zf:
+                zf.extractall(cache_path)
+        except zipfile.BadZipFile:
+            csv_path.write_bytes(data)
         print("  Downloaded.", flush=True)
-
-    # Parse the fold files -- expected structure: cv_abide/intersite/fold_N.csv
-    # Each file contains subject IDs for that fold's test set
-    subject_to_fold = {}
-    intersite_dir = cache_path / "cv_abide" / "intersite"
-    if not intersite_dir.is_dir():
-        # Try alternative structure
-        for d in cache_path.rglob("intersite"):
-            intersite_dir = d
-            break
-
-    if intersite_dir.is_dir():
-        for fold_file in sorted(intersite_dir.glob("*.csv")):
-            fold_idx = int(fold_file.stem.split("_")[-1]) - 1  # fold_1 -> 0
-            df = pd.read_csv(fold_file, header=None)
-            for sub_id in df.iloc[:, 0]:
-                subject_to_fold[int(sub_id)] = fold_idx
-        print(f"  Loaded {len(subject_to_fold)} subjects across "
-              f"{max(subject_to_fold.values()) + 1} folds", flush=True)
     else:
-        # Fallback: look for any CSV files
-        print(f"  WARNING: intersite dir not found, searching recursively...", flush=True)
-        for csv_file in sorted(cache_path.rglob("*.csv")):
-            print(f"    Found: {csv_file}", flush=True)
+        print("  CV splits already cached.", flush=True)
 
+    # Parse the wide CSV
+    # Row 0: header with column group names (subsamble, folds_sss, folds_loso, ...)
+    # Row 1: iter numbers (0,0,1,1,...,9,9)
+    # Row 2: type (train, test, train, test, ...)
+    # Row 3: empty
+    # Rows 4+: subject_id, 0/1, 0/1, ... (1=in this set, 0=not)
+    df = pd.read_csv(csv_path, header=None)
+
+    # Find the folds_loso columns (inter-site CV)
+    header = df.iloc[0].values
+    iters = df.iloc[1].values
+    types = df.iloc[2].values
+
+    # Find column indices for folds_loso test sets
+    loso_test_cols = {}  # fold_idx -> column_index
+    for col_idx in range(1, len(header)):
+        if str(header[col_idx]) == "folds_loso" and str(types[col_idx]) == "test":
+            fold_idx = int(iters[col_idx])
+            loso_test_cols[fold_idx] = col_idx
+
+    print(f"  Found {len(loso_test_cols)} LOSO test folds", flush=True)
+
+    # Build subject -> fold mapping
+    subject_to_fold = {}
+    for row_idx in range(4, len(df)):
+        sub_id = df.iloc[row_idx, 0]
+        if pd.isna(sub_id) or str(sub_id).strip() == "":
+            continue
+        sub_id = int(float(sub_id))
+        for fold_idx, col_idx in loso_test_cols.items():
+            val = df.iloc[row_idx, col_idx]
+            if not pd.isna(val) and int(float(val)) == 1:
+                subject_to_fold[sub_id] = fold_idx
+                break
+
+    n_folds = len(set(subject_to_fold.values())) if subject_to_fold else 0
+    print(f"  Mapped {len(subject_to_fold)} subjects to {n_folds} folds", flush=True)
     return subject_to_fold
 
 
