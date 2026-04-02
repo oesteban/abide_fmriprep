@@ -74,39 +74,22 @@ def extract_cpac_timeseries(data_dir: str | None = None):
     cache_dir = Path(data_dir or Path.home() / "nilearn_data") / "ABIDE_pcp" / "cpac" / "filt_noglobal"
     phenotypic_path = Path(data_dir or Path.home() / "nilearn_data") / "ABIDE_pcp" / "Phenotypic_V1_0b_preprocessed1.csv"
 
-    if cache_dir.is_dir() and phenotypic_path.exists():
-        # Load from cache directly (skip nilearn's slow re-verification)
-        print(f"Loading cached PCP data from {cache_dir}")
-        phenotypic = pd.read_csv(phenotypic_path)
-
-        # Build a lookup from (SITE_ID, SUB_ID) -> row index
-        # SUB_ID in the CSV is numeric; filenames are zero-padded to 7 digits
-        func_files = []
-        pheno_keep = []
-        for _, row in phenotypic.iterrows():
-            site = str(row["SITE_ID"])
-            sub = str(int(row["SUB_ID"])).zfill(7)
-            fpath = cache_dir / f"{site}_{sub}_func_preproc.nii.gz"
-            if fpath.exists():
-                func_files.append(str(fpath))
-                pheno_keep.append(row)
-        phenotypic = pd.DataFrame(pheno_keep).reset_index(drop=True)
-        print(f"  Found {len(func_files)} cached subjects (quality-checked by initial download)")
-    else:
-        # First-time download via nilearn
-        print("Fetching ABIDE PCP (C-PAC, func_preproc)...")
-        abide = fetch_abide_pcp(
-            data_dir=data_dir,
-            pipeline="cpac",
-            band_pass_filtering=True,
-            global_signal_regression=False,
-            derivatives=["func_preproc"],
-            quality_checked=True,
-            verbose=1,
-        )
-        func_files = abide.func_preproc
-        phenotypic = abide.phenotypic
-        print(f"  Downloaded {len(func_files)} subjects")
+    # Always use fetch_abide_pcp to ensure all subjects are downloaded.
+    # This verifies cached files and fetches any missing ones.
+    print("Fetching ABIDE PCP (C-PAC, func_preproc)...", flush=True)
+    print("  (This may take a while on first run or if cache is incomplete)", flush=True)
+    abide = fetch_abide_pcp(
+        data_dir=data_dir,
+        pipeline="cpac",
+        band_pass_filtering=True,
+        global_signal_regression=False,
+        derivatives=["func_preproc"],
+        quality_checked=True,
+        verbose=1,
+    )
+    func_files = abide.func_preproc
+    phenotypic = abide.phenotypic
+    print(f"  Total subjects: {len(func_files)}", flush=True)
 
     atlas = fetch_atlas_msdl()
     print(f"  MSDL atlas loaded ({len(atlas.labels)} regions)", flush=True)
