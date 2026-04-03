@@ -140,6 +140,9 @@ def main():
         high_pass=None,
     )
 
+    conn_dir = derivatives_connectivity(root, variant="fmriprep-baseline")
+    region_labels = list(atlas.labels)
+
     timeseries = []
     labels = []
     site_labels = []
@@ -162,6 +165,28 @@ def main():
             sex_values.append(s["sex"])
             fold_values.append(s["fold"])
             extracted += 1
+
+            # Write BEP017 per-subject outputs
+            pid = s["participant_id"]
+            func_dir = conn_dir / pid / "ses-1" / "func"
+            func_dir.mkdir(parents=True, exist_ok=True)
+            stem = f"{pid}_ses-1_task-rest_{s['run_label']}_space-{SPACE}_atlas-MSDL"
+            ts_df = pd.DataFrame(ts, columns=region_labels)
+            ts_df.to_parquet(func_dir / f"{stem}_stat-mean_timeseries.parquet", index=False)
+
+            sidecar = {
+                "Atlas": "MSDL",
+                "NumberOfRegions": N_MSDL_REGIONS,
+                "NumberOfVolumes": int(ts.shape[0]),
+                "Pipeline": "fmriprep",
+                "Standardize": "zscore_sample",
+                "Detrend": True,
+                "SoftwareVersions": software_versions(),
+                "Timestamp": datetime.now(timezone.utc).isoformat(),
+            }
+            with open(func_dir / f"{stem}_stat-mean_timeseries.json", "w") as f:
+                json.dump(sidecar, f, indent=2)
+
         except Exception as e:
             print(f"  FAILED: {s['participant_id']}: {e}", flush=True)
             failed += 1
