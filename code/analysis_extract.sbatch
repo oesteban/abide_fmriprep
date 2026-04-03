@@ -16,11 +16,8 @@ set -euo pipefail
 #   sbatch --array=1-N code/analysis_extract.sbatch \
 #       --project-root /path \
 #       --subjects-file /path/to/subjects.txt \
-#       [--variants v1 v2 v3]
+#       [--variants "v1 v2 v3"]
 # -------------------------------------------------------------------
-
-source "$(dirname "$0")/analysis_env.sh"
-export PATH="$ANALYSIS_ENV:$DATALAD_ENV:$PATH"
 
 PROJECT_ROOT=""
 SUBJECTS_FILE=""
@@ -39,6 +36,10 @@ if [[ -z "$PROJECT_ROOT" ]] || [[ -z "$SUBJECTS_FILE" ]]; then
     echo "ERROR: --project-root and --subjects-file required"
     exit 1
 fi
+
+# Source env after PROJECT_ROOT is known
+source "$PROJECT_ROOT/code/analysis_env.sh"
+export PATH="$ANALYSIS_ENV:$DATALAD_ENV:$PATH"
 
 SUBJECT=$(sed -n "${SLURM_ARRAY_TASK_ID}p" "$SUBJECTS_FILE")
 if [[ -z "$SUBJECT" ]]; then

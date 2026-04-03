@@ -8,8 +8,6 @@
 
 set -euo pipefail
 
-source "$(dirname "$0")/analysis_env.sh"
-export PATH="$ANALYSIS_ENV:$PATH"
 
 PROJECT_ROOT=""
 VARIANT="v1"
@@ -26,6 +24,8 @@ if [[ -z "$PROJECT_ROOT" ]]; then
     echo "ERROR: --project-root is required"
     exit 1
 fi
+
+source "$PROJECT_ROOT/code/analysis_env.sh"
 
 echo "=== Build connectomes (variant $VARIANT) ==="
 echo "Project root: $PROJECT_ROOT"

@@ -18,8 +18,6 @@ set -euo pipefail
 #       --variant v1
 # -------------------------------------------------------------------
 
-source "$(dirname "$0")/analysis_env.sh"
-export PATH="$ANALYSIS_ENV:$PATH"
 
 PROJECT_ROOT=""
 SUBJECTS_FILE=""
@@ -38,6 +36,8 @@ if [[ -z "$PROJECT_ROOT" ]] || [[ -z "$SUBJECTS_FILE" ]]; then
     echo "ERROR: --project-root and --subjects-file are required"
     exit 1
 fi
+
+source "$PROJECT_ROOT/code/analysis_env.sh"
 
 SUBJECT=$(sed -n "${SLURM_ARRAY_TASK_ID}p" "$SUBJECTS_FILE")
 if [[ -z "$SUBJECT" ]]; then
