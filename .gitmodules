@@ -212,3 +212,7 @@
 	path = derivatives/connectivity-cpac
 	url = git@github.com:abide-fmriprep/connectivity-cpac.git
 	datalad-id = 525dbf28-cecd-4391-91b4-820473acd391
+[submodule "derivatives/connectivity-fmriprep-baseline"]
+	path = derivatives/connectivity-fmriprep-baseline
+	url = ./derivatives/connectivity-fmriprep-baseline
+	datalad-id = 33e7fa01-813f-43ac-9812-6457db4beeaf
