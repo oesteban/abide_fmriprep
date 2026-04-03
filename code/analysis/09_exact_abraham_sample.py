@@ -1,16 +1,14 @@
 #!/usr/bin/env python3
-"""Run variant E on Abraham's exact 714-subject sample using fMRIPrep data.
+"""fMRIPrep baseline: same subjects, folds, and classification as C-PAC ablation E.
 
-Extracts time series for any subjects in Abraham's CV splits that don't
-already have extracted data (subjects that failed our QC but passed PCP's),
-then runs the full classification on the matched sample.
-
-This ensures an apples-to-apples comparison: same subjects, same CV folds,
-same classification settings -- only the preprocessing differs.
+Takes Abraham's exact 714-subject CV split, uses fMRIPrep-preprocessed BOLD
+instead of C-PAC, extracts MSDL time series, and runs variant E classification.
+Direct comparison with 07_faithful_replication.py variant E.
 
 Usage::
 
-    python code/analysis/09_exact_abraham_sample.py --project-root . [--data-dir /path]
+    python code/analysis/09_exact_abraham_sample.py --project-root . \
+        --data-dir /path/to/nilearn_cache [--dry-run]
 """
 
 from __future__ import annotations
@@ -21,15 +19,11 @@ import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
-import h5py
 import nibabel as nib
 import numpy as np
 import pandas as pd
 from nilearn.datasets import fetch_atlas_msdl
-from nilearn.image import clean_img
-from nilearn.interfaces.fmriprep import load_confounds
 from nilearn.maskers import NiftiMapsMasker
-from nilearn.signal import clean
 from sklearn.linear_model import RidgeClassifier
 from sklearn.model_selection import GridSearchCV, PredefinedSplit
 from sklearn.svm import SVC
@@ -44,196 +38,154 @@ def _setup_path():
 _setup_path()
 
 from _helpers import (
-    CONFOUND_COMPCOR,
-    CONFOUND_MOTION,
-    CONFOUND_N_COMPCOR,
-    CONFOUND_STRATEGY,
-    LOW_PASS,
     N_MSDL_REGIONS,
     RANDOM_STATE,
-    SPACE,
     TangentEmbeddingTransformer,
-    bep017_stem,
-    bold_json_from_confounds,
-    bold_path_from_confounds,
-    brain_mask_from_confounds,
     derivatives_connectivity,
     derivatives_fmriprep,
     fetch_abraham_cv_splits,
     find_confounds,
+    bold_path_from_confounds,
     get_tr,
-    output_dir,
     regress_confounds,
     software_versions,
 )
-
-
-def extract_single_subject(subject_id, fmriprep_dir, conn_dir):
-    """Extract MSDL time series for one subject, ignoring QC thresholds.
-
-    Uses v3 (two-stage) denoising to match the current extraction on disk.
-    Returns the path to the parquet file, or None on failure.
-    """
-    runs = find_confounds(subject_id, fmriprep_dir)
-    if not runs:
-        return None
-
-    # Pick run-1 (or first available) since we don't have QC-based selection
-    run_label, conf_path = runs[0]
-
-    bold = bold_path_from_confounds(conf_path)
-    mask = brain_mask_from_confounds(conf_path)
-    if not bold.exists() or not mask.exists():
-        return None
-
-    tr = get_tr(conf_path)
-    atlas = fetch_atlas_msdl()
-    region_labels = list(atlas.labels)
-
-    # Stage 1: voxel-level cleaning
-    confounds_stage1, sample_mask = load_confounds(
-        str(bold),
-        strategy=CONFOUND_STRATEGY,
-        motion=CONFOUND_MOTION,
-        compcor=CONFOUND_COMPCOR,
-        n_compcor=CONFOUND_N_COMPCOR,
-        demean=True,
-    )
-    bold_clean = clean_img(
-        str(bold),
-        confounds=confounds_stage1,
-        low_pass=LOW_PASS,
-        high_pass=0.01,
-        t_r=tr,
-        detrend=True,
-        mask_img=str(mask),
-    )
-
-    # Stage 2: ROI extraction + tCompCor
-    masker = NiftiMapsMasker(
-        maps_img=atlas.maps,
-        standardize="zscore_sample",
-        detrend=False,
-        low_pass=None,
-        high_pass=None,
-        t_r=tr,
-    )
-    timeseries = masker.fit_transform(bold_clean)
-
-    confounds_tsv = pd.read_csv(conf_path, sep="\t")
-    tcompcor_cols = sorted([c for c in confounds_tsv.columns if c.startswith("t_comp_cor_")])[:CONFOUND_N_COMPCOR]
-    if tcompcor_cols:
-        confounds_stage2 = confounds_tsv[tcompcor_cols].values
-        timeseries = clean(timeseries, confounds=confounds_stage2, detrend=False, standardize="zscore_sample")
-
-    # Write parquet
-    odir = output_dir(subject_id, conn_dir)
-    stem = bep017_stem(subject_id, run_label)
-    ts_path = odir / f"{stem}_stat-mean_timeseries.parquet"
-    ts_df = pd.DataFrame(timeseries, columns=region_labels)
-    ts_df.to_parquet(ts_path, index=False)
-
-    return str(ts_path)
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--project-root", type=Path, default=Path("."))
     parser.add_argument("--data-dir", type=str, default=None)
+    parser.add_argument("--dry-run", action="store_true",
+                        help="Check subject matching without extracting or classifying.")
     args = parser.parse_args()
     root = args.project_root.resolve()
     np.random.seed(RANDOM_STATE)
 
-    # Fetch Abraham's CV splits
+    # 1. Get Abraham's 714-subject CV fold assignments
     print("Fetching Abraham's CV splits...", flush=True)
     cv_splits = fetch_abraham_cv_splits(
         Path(args.data_dir) if args.data_dir else None
     )
     print(f"  {len(cv_splits)} subjects in CV splits", flush=True)
 
-    # Map source_subject_id <-> participant_id
+    # 2. Map PCP source_subject_id → our participant_id
     pheno = pd.read_csv(root / "inputs" / "abide-both" / "participants.tsv", sep="\t")
-    a1 = pheno[pheno["source_dataset"] == "abide1"].copy()
-    sid_to_row = {}
-    for _, row in a1.iterrows():
-        sid_to_row[int(row["source_subject_id"])] = row
+    a1 = pheno[pheno["source_dataset"] == "abide1"]
+    sid_to_row = {int(r["source_subject_id"]): r for _, r in a1.iterrows()}
 
+    # 3. Check fMRIPrep availability for each CV subject
     fmriprep_dir = derivatives_fmriprep(root)
-    conn_dir = derivatives_connectivity(root, variant="fmriprep-baseline")
+    atlas = fetch_atlas_msdl()
 
-    # For each Abraham CV subject, load or extract time series
-    print("\nLoading/extracting time series for Abraham's exact sample...", flush=True)
-    timeseries = []
-    labels = []
-    sites = []
-    ages = []
-    sexes = []
-    fold_ids = []
-    matched = 0
-    extracted_new = 0
-    skipped = 0
+    subjects = []  # list of dicts with all info needed
+    no_mapping = []
+    no_fmriprep = []
 
     for source_sid, fold_idx in sorted(cv_splits.items()):
         row = sid_to_row.get(source_sid)
         if row is None:
-            skipped += 1
+            no_mapping.append(source_sid)
             continue
 
         pid = row["participant_id"]
-        group = row["group"]
-        if group not in ("ASD", "TC"):
-            skipped += 1
+        runs = find_confounds(pid, fmriprep_dir)
+        if not runs:
+            no_fmriprep.append((source_sid, pid))
             continue
 
-        # Try to load existing extracted time series
-        func_dir = conn_dir / pid / "ses-1" / "func"
-        ts = None
-        if func_dir.is_dir():
-            parquets = list(func_dir.glob("*_timeseries.parquet"))
-            if parquets:
-                ts = pd.read_parquet(parquets[0]).values
+        run_label, conf_path = runs[0]  # first available run
+        bold = bold_path_from_confounds(conf_path)
 
-        # If not extracted, extract now
-        if ts is None:
-            ts_path = extract_single_subject(pid, fmriprep_dir, conn_dir)
-            if ts_path:
-                ts = pd.read_parquet(ts_path).values
-                extracted_new += 1
-            else:
-                skipped += 1
+        subjects.append({
+            "source_sid": source_sid,
+            "participant_id": pid,
+            "fold": fold_idx,
+            "run_label": run_label,
+            "conf_path": conf_path,
+            "bold_path": bold,
+            "group": row["group"],
+            "site": str(row["source_site"]),
+            "age": float(row["age"]) if pd.notna(row.get("age")) else 25.0,
+            "sex": 1 if row.get("sex") == "M" else 2,
+        })
+
+    print(f"\n  Matched to fMRIPrep: {len(subjects)}", flush=True)
+    print(f"  No mapping in participants.tsv: {len(no_mapping)}", flush=True)
+    print(f"  No fMRIPrep derivatives: {len(no_fmriprep)}", flush=True)
+    if no_fmriprep:
+        for sid, pid in no_fmriprep:
+            print(f"    {pid} (source_sid={sid})", flush=True)
+
+    folds = sorted(set(s["fold"] for s in subjects))
+    sites = sorted(set(s["site"] for s in subjects))
+    print(f"  Folds: {len(folds)}, Sites: {len(sites)}", flush=True)
+
+    if args.dry_run:
+        # Check BOLD availability (file exists on disk vs annex pointer)
+        bold_available = sum(1 for s in subjects if s["bold_path"].exists() and s["bold_path"].stat().st_size > 1000)
+        bold_pointer = len(subjects) - bold_available
+        print(f"\n  BOLD files available (content on disk): {bold_available}", flush=True)
+        print(f"  BOLD files needing datalad get: {bold_pointer}", flush=True)
+        print(f"\n  DRY RUN complete. {len(subjects)} subjects ready for extraction.", flush=True)
+        return
+
+    # 4. Extract MSDL time series for all matched subjects
+    print(f"\nExtracting time series for {len(subjects)} subjects...", flush=True)
+    masker = NiftiMapsMasker(
+        maps_img=atlas.maps,
+        standardize="zscore_sample",
+        detrend=True,
+        low_pass=None,
+        high_pass=None,
+    )
+
+    timeseries = []
+    labels = []
+    site_labels = []
+    age_values = []
+    sex_values = []
+    fold_values = []
+    extracted = 0
+    failed = 0
+
+    for i, s in enumerate(subjects):
+        try:
+            ts = masker.fit_transform(str(s["bold_path"]))
+            if ts.shape[1] != N_MSDL_REGIONS:
+                failed += 1
                 continue
+            timeseries.append(ts)
+            labels.append(1 if s["group"] == "ASD" else 0)
+            site_labels.append(s["site"])
+            age_values.append(s["age"])
+            sex_values.append(s["sex"])
+            fold_values.append(s["fold"])
+            extracted += 1
+        except Exception as e:
+            print(f"  FAILED: {s['participant_id']}: {e}", flush=True)
+            failed += 1
 
-        if ts.shape[1] != N_MSDL_REGIONS:
-            skipped += 1
-            continue
-
-        timeseries.append(ts)
-        labels.append(1 if group == "ASD" else 0)
-        sites.append(str(row["source_site"]))
-        fold_ids.append(fold_idx)
-        ages.append(float(row["age"]) if pd.notna(row.get("age")) else 25.0)
-        sexes.append(1 if row.get("sex") == "M" else 2)
-        matched += 1
-
-        if matched % 100 == 0:
-            print(f"  Loaded {matched} subjects ({extracted_new} newly extracted)", flush=True)
+        if (i + 1) % 50 == 0:
+            print(f"  {i + 1}/{len(subjects)} (extracted: {extracted}, failed: {failed})", flush=True)
 
     labels = np.array(labels)
-    sites = np.array(sites)
-    ages = np.array(ages)
-    sexes = np.array(sexes)
-    fold_ids = np.array(fold_ids)
+    site_labels = np.array(site_labels)
+    ages = np.array(age_values)
+    sexes = np.array(sex_values)
+    fold_ids = np.array(fold_values)
 
-    print(f"\n=== Abraham's exact sample on fMRIPrep data ===", flush=True)
-    print(f"  Matched: {matched} / {len(cv_splits)} ({extracted_new} newly extracted, {skipped} skipped)", flush=True)
+    print(f"\n=== fMRIPrep baseline (Abraham's exact sample) ===", flush=True)
+    print(f"  Extracted: {extracted}, Failed: {failed}", flush=True)
     print(f"  ASD: {(labels == 1).sum()}, TC: {(labels == 0).sum()}", flush=True)
-    print(f"  Sites: {len(np.unique(sites))}, Folds: {len(np.unique(fold_ids))}", flush=True)
+    print(f"  Sites: {len(np.unique(site_labels))}, Folds: {len(np.unique(fold_ids))}", flush=True)
 
-    # Run variant E classification with Abraham's predefined splits
+    # 5. Variant E classification (same as 07_faithful_replication.py variant E)
+    conn_dir = derivatives_connectivity(root, variant="fmriprep-baseline")
     cls_dir = conn_dir / "classification"
     cls_dir.mkdir(parents=True, exist_ok=True)
 
-    unique_sites = np.unique(sites)
+    unique_sites = np.unique(site_labels)
     site_to_idx = {s: i for i, s in enumerate(unique_sites)}
     cv = PredefinedSplit(fold_ids)
 
@@ -246,25 +198,20 @@ def main():
             ts_test = [timeseries[i] for i in test_idx]
             y_train, y_test = labels[train_idx], labels[test_idx]
 
-            # Tangent embedding
             tangent = TangentEmbeddingTransformer(assume_centered=True)
             tangent.fit(ts_train)
             X_train = tangent.transform(ts_train)
             X_test = tangent.transform(ts_test)
 
-            # Confound regression (site + age + sex)
-            def _build_confounds(idx):
+            def _confounds(idx):
                 n = len(idx)
-                site_dummies = np.zeros((n, len(unique_sites)))
+                sd = np.zeros((n, len(unique_sites)))
                 for j, i in enumerate(idx):
-                    site_dummies[j, site_to_idx[sites[i]]] = 1.0
-                return np.column_stack([site_dummies, ages[idx].reshape(-1, 1), sexes[idx].reshape(-1, 1)])
+                    sd[j, site_to_idx[site_labels[i]]] = 1.0
+                return np.column_stack([sd, ages[idx].reshape(-1, 1), sexes[idx].reshape(-1, 1)])
 
-            X_train, X_test = regress_confounds(
-                X_train, X_test, _build_confounds(train_idx), _build_confounds(test_idx)
-            )
+            X_train, X_test = regress_confounds(X_train, X_test, _confounds(train_idx), _confounds(test_idx))
 
-            # Classifier with nested CV tuning
             if clf_name == "ridge":
                 clf = GridSearchCV(RidgeClassifier(), {"alpha": np.logspace(-3, 3, 7)}, cv=5, scoring="accuracy")
             else:
@@ -276,15 +223,14 @@ def main():
 
         accuracies = [r["accuracy"] for r in fold_results]
         result = {
-            "experiment": "fmriprep_exact_abraham_sample",
+            "experiment": "fmriprep_baseline",
             "variant": "E_full_replication",
             "cv_scheme": "abraham_10fold",
             "classifier": clf_name,
             "n_folds": len(np.unique(fold_ids)),
-            "n_subjects": matched,
+            "n_subjects": extracted,
             "n_subjects_abraham": len(cv_splits),
-            "n_newly_extracted": extracted_new,
-            "n_skipped": skipped,
+            "n_failed": failed,
             "mean_accuracy": round(float(np.mean(accuracies)), 6),
             "std_accuracy": round(float(np.std(accuracies)), 6),
             "per_fold": fold_results,
