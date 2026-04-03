@@ -8,23 +8,22 @@ set -euo pipefail
 # completion, drop BOLD data to reclaim scratch.
 #
 # Usage:
-#   bash code/analysis_orchestrate.sh -C /path/to/abide_fmriprep
+#   bash code/analysis_orchestrate.sh -C /path/to/abide_fmriprep [--variant v1]
 #
 # Prerequisites:
-#   - Pre-screen QC completed (derivatives/connectivity/qc_prescreen.tsv)
-#   - micromamba env 'abide-analysis' installed
-#   - fmriprep env with datalad/git-annex available
+#   - Pre-screen QC completed (derivatives/connectivity-{variant}/qc_prescreen.tsv)
+#   - micromamba envs 'abide-analysis' and 'fmriprep' available
 # -------------------------------------------------------------------
 
-# Environment paths (Curnagl)
-DATALAD_ENV="/work/FAC/FBM/DNF/oesteban/hcph/opt/mamba/envs/fmriprep/bin"
-ANALYSIS_ENV="/work/FAC/FBM/DNF/oesteban/hcph/opt/mamba/envs/abide-analysis/bin"
+source "$(dirname "$0")/analysis_env.sh"
 
 PROJECT_ROOT=""
+VARIANT="v1"
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
         -C) PROJECT_ROOT="$2"; shift 2 ;;
+        --variant) VARIANT="$2"; shift 2 ;;
         *) echo "Unknown argument: $1"; exit 1 ;;
     esac
 done
@@ -36,21 +35,21 @@ fi
 
 PROJECT_ROOT=$(cd "$PROJECT_ROOT" && pwd)
 FMRIPREP_DIR="$PROJECT_ROOT/derivatives/fmriprep-25.2"
-CONN_DIR="$PROJECT_ROOT/derivatives/connectivity"
+CONN_DIR="$PROJECT_ROOT/derivatives/connectivity-${VARIANT}"
 QC_TSV="$CONN_DIR/qc_prescreen.tsv"
 
 if [[ ! -f "$QC_TSV" ]]; then
     echo "ERROR: Pre-screen QC not found at $QC_TSV"
-    echo "  Run: sbatch code/analysis_prescreen.sbatch --project-root $PROJECT_ROOT"
+    echo "  Run: python3 code/analysis/01_prescreen_qc.py --project-root $PROJECT_ROOT --variant $VARIANT"
     exit 1
 fi
 
 # Extract unique site prefixes from subjects that passed QC
-# (site prefix = v1s0, v1s1, ..., v2s18)
 SITES=$(awk -F'\t' 'NR>1 && $NF=="pass" { match($1, /sub-(v[12]s[0-9]+)x/, a); print a[1] }' "$QC_TSV" | sort -u)
 
 echo "=== ABIDE Analysis Orchestrator ==="
 echo "Project root: $PROJECT_ROOT"
+echo "Variant: $VARIANT"
 echo "Sites to process: $(echo $SITES | wc -w)"
 echo ""
 
@@ -75,7 +74,6 @@ for site in $SITES; do
     export PATH="$DATALAD_ENV:$PATH"
 
     while IFS= read -r sub; do
-        # Get the selected run from qc_prescreen.tsv (may include acq- entity, e.g. "acq-pedj_run-1")
         run=$(awk -F'\t' -v sid="$sub" 'NR>1 && $1==sid { print $5 }' "$QC_TSV")
         bold_pattern="${sub}/ses-1/func/${sub}_ses-1_task-rest_${run}_space-MNI152NLin2009cAsym_desc-preproc_bold.nii.gz"
         mask_pattern="${sub}/ses-1/func/${sub}_ses-1_task-rest_${run}_space-MNI152NLin2009cAsym_desc-brain_mask.nii.gz"
@@ -93,7 +91,8 @@ for site in $SITES; do
         --array="1-${N_SUBJECTS}" \
         "$PROJECT_ROOT/code/analysis_timeseries.sbatch" \
         --project-root "$PROJECT_ROOT" \
-        --subjects-file "$SITE_SUBJECTS")
+        --subjects-file "$SITE_SUBJECTS" \
+        --variant "$VARIANT")
     echo "  Job ID: $JOB_ID (array 1-${N_SUBJECTS})"
 
     # 4. Wait for job completion
@@ -107,7 +106,6 @@ for site in $SITES; do
     echo "  Dropping BOLD data for site $site..."
     cd "$FMRIPREP_DIR"
     while IFS= read -r sub; do
-        # selected_run may include acq- entity
         run=$(awk -F'\t' -v sid="$sub" 'NR>1 && $1==sid { print $5 }' "$QC_TSV")
         bold_pattern="${sub}/ses-1/func/${sub}_ses-1_task-rest_${run}_space-MNI152NLin2009cAsym_desc-preproc_bold.nii.gz"
         mask_pattern="${sub}/ses-1/func/${sub}_ses-1_task-rest_${run}_space-MNI152NLin2009cAsym_desc-brain_mask.nii.gz"
@@ -121,5 +119,5 @@ done
 echo "=== All sites processed ==="
 echo ""
 echo "Next steps:"
-echo "  1. datalad save -d $CONN_DIR -m 'enh: Complete time series extraction'"
-echo "  2. sbatch code/analysis_classify.sbatch --project-root $PROJECT_ROOT"
+echo "  1. datalad save -d $CONN_DIR -m 'enh: Complete time series extraction ($VARIANT)'"
+echo "  2. sbatch code/analysis_classify.sbatch --project-root $PROJECT_ROOT --variant $VARIANT"

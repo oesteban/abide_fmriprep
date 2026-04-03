@@ -8,19 +8,16 @@
 
 set -euo pipefail
 
-# -------------------------------------------------------------------
-# Build connectomes and run classification (single job, after all
-# time series extraction jobs complete).
-#
-# Usage:
-#   sbatch code/analysis_classify.sbatch --project-root /path/to/abide_fmriprep
-# -------------------------------------------------------------------
+source "$(dirname "$0")/analysis_env.sh"
+export PATH="$ANALYSIS_ENV:$PATH"
 
 PROJECT_ROOT=""
+VARIANT="v1"
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --project-root) PROJECT_ROOT="$2"; shift 2 ;;
+        --variant) VARIANT="$2"; shift 2 ;;
         *) echo "Unknown argument: $1"; exit 1 ;;
     esac
 done
@@ -30,10 +27,7 @@ if [[ -z "$PROJECT_ROOT" ]]; then
     exit 1
 fi
 
-# Activate analysis environment (Curnagl: PATH-based)
-export PATH=/work/FAC/FBM/DNF/oesteban/hcph/opt/mamba/envs/abide-analysis/bin:$PATH
-
-echo "=== Build connectomes ==="
+echo "=== Build connectomes (variant $VARIANT) ==="
 echo "Project root: $PROJECT_ROOT"
 echo "Host: $(hostname)"
 echo "Date: $(date -Iseconds)"

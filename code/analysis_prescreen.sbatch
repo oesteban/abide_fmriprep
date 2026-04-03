@@ -8,12 +8,8 @@
 
 set -euo pipefail
 
-# -------------------------------------------------------------------
-# Pre-screen QC: reads confounds TSVs (git-tracked, no datalad get).
-#
-# Usage:
-#   sbatch code/analysis_prescreen.sbatch --project-root /path/to/abide_fmriprep
-# -------------------------------------------------------------------
+source "$(dirname "$0")/analysis_env.sh"
+export PATH="$ANALYSIS_ENV:$PATH"
 
 PROJECT_ROOT=""
 
@@ -28,9 +24,6 @@ if [[ -z "$PROJECT_ROOT" ]]; then
     echo "ERROR: --project-root is required"
     exit 1
 fi
-
-# Activate analysis environment (Curnagl: PATH-based)
-export PATH=/work/FAC/FBM/DNF/oesteban/hcph/opt/mamba/envs/abide-analysis/bin:$PATH
 
 echo "=== Pre-screen QC ==="
 echo "Project root: $PROJECT_ROOT"

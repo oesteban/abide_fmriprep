@@ -187,7 +187,7 @@ def classify(project_root: Path):
     qc_pass = qc_df[qc_df["excluded_reason"] == "pass"].copy()
 
     # Load time series
-    print("Loading time series...")
+    print("Loading time series...", flush=True)
     from _helpers import bep017_stem
 
     timeseries_all = []
@@ -222,7 +222,7 @@ def classify(project_root: Path):
     datasets_all = np.array(datasets_all)
 
     print(f"  Loaded {len(timeseries_all)} subjects "
-          f"({(labels_all == 1).sum()} ASD, {(labels_all == 0).sum()} TC)")
+          f"({(labels_all == 1).sum()} ASD, {(labels_all == 0).sum()} TC)", flush=True)
 
     # Create classification output directory
     cls_dir = conn_dir / "classification"
@@ -234,10 +234,10 @@ def classify(project_root: Path):
     y_a1 = labels_all[abide1_mask]
     sites_a1 = sites_all[abide1_mask]
 
-    print(f"\n=== Experiment 1: ABIDE I only (N={len(ts_a1)}) ===")
+    print(f"\n=== Experiment 1: ABIDE I only (N={len(ts_a1)}) ===", flush=True)
 
     for clf_name in ("ridge", "svc"):
-        print(f"\n  Inter-site CV ({clf_name})...")
+        print(f"\n  Inter-site CV ({clf_name})...", flush=True)
         result = run_intersite_cv(ts_a1, y_a1, sites_a1, clf_name)
         result["experiment"] = "abide1"
         result["timestamp"] = datetime.now(timezone.utc).isoformat()
@@ -245,9 +245,9 @@ def classify(project_root: Path):
         with open(out_path, "w") as f:
             json.dump(result, f, indent=2)
         print(f"    Mean accuracy: {result['mean_accuracy']:.4f} "
-              f"(+/- {result['std_accuracy']:.4f})")
+              f"(+/- {result['std_accuracy']:.4f})", flush=True)
 
-        print(f"  Intra-site CV ({clf_name})...")
+        print(f"  Intra-site CV ({clf_name})...", flush=True)
         result = run_intrasite_cv(ts_a1, y_a1, sites_a1, clf_name)
         result["experiment"] = "abide1"
         result["timestamp"] = datetime.now(timezone.utc).isoformat()
@@ -255,13 +255,13 @@ def classify(project_root: Path):
         with open(out_path, "w") as f:
             json.dump(result, f, indent=2)
         if result["mean_of_medians"] is not None:
-            print(f"    Mean of medians: {result['mean_of_medians']:.4f}")
+            print(f"    Mean of medians: {result['mean_of_medians']:.4f}", flush=True)
 
     # --- Experiment 2: ABIDE I + II combined ---
-    print(f"\n=== Experiment 2: ABIDE I+II combined (N={len(timeseries_all)}) ===")
+    print(f"\n=== Experiment 2: ABIDE I+II combined (N={len(timeseries_all)}) ===", flush=True)
 
     for clf_name in ("ridge", "svc"):
-        print(f"\n  Inter-site CV ({clf_name})...")
+        print(f"\n  Inter-site CV ({clf_name})...", flush=True)
         result = run_intersite_cv(timeseries_all, labels_all, sites_all, clf_name)
         result["experiment"] = "both"
         result["timestamp"] = datetime.now(timezone.utc).isoformat()
@@ -269,9 +269,9 @@ def classify(project_root: Path):
         with open(out_path, "w") as f:
             json.dump(result, f, indent=2)
         print(f"    Mean accuracy: {result['mean_accuracy']:.4f} "
-              f"(+/- {result['std_accuracy']:.4f})")
+              f"(+/- {result['std_accuracy']:.4f})", flush=True)
 
-        print(f"  Intra-site CV ({clf_name})...")
+        print(f"  Intra-site CV ({clf_name})...", flush=True)
         result = run_intrasite_cv(timeseries_all, labels_all, sites_all, clf_name)
         result["experiment"] = "both"
         result["timestamp"] = datetime.now(timezone.utc).isoformat()
@@ -279,9 +279,9 @@ def classify(project_root: Path):
         with open(out_path, "w") as f:
             json.dump(result, f, indent=2)
         if result["mean_of_medians"] is not None:
-            print(f"    Mean of medians: {result['mean_of_medians']:.4f}")
+            print(f"    Mean of medians: {result['mean_of_medians']:.4f}", flush=True)
 
-    print(f"\nAll results saved to {cls_dir}/")
+    print(f"\nAll results saved to {cls_dir}/", flush=True)
 
 
 def main():

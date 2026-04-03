@@ -119,7 +119,7 @@ def extract_cpac_timeseries(data_dir: str | None = None):
             print(f"  Processed {i + 1}/{len(func_files)} "
                   f"(extracted: {len(timeseries_list)}, skipped: {skipped})", flush=True)
 
-    print(f"  Extracted: {len(timeseries_list)}, skipped: {skipped}")
+    print(f"  Extracted: {len(timeseries_list)}, skipped: {skipped}", flush=True)
     return timeseries_list, np.array(labels), np.array(sites), subject_ids
 
 
@@ -222,33 +222,33 @@ def main():
     # Extract time series from C-PAC data
     timeseries, labels, sites, subject_ids = extract_cpac_timeseries(args.data_dir)
 
-    print(f"\n=== Baseline: C-PAC preprocessed ABIDE I (N={len(timeseries)}) ===")
-    print(f"  ASD: {(labels == 1).sum()}, TC: {(labels == 0).sum()}")
-    print(f"  Sites: {len(np.unique(sites))}")
+    print(f"\n=== Baseline: C-PAC preprocessed ABIDE I (N={len(timeseries)}) ===", flush=True)
+    print(f"  ASD: {(labels == 1).sum()}, TC: {(labels == 0).sum()}", flush=True)
+    print(f"  Sites: {len(np.unique(sites))}", flush=True)
 
     cls_dir = derivatives_connectivity(root) / "classification"
     cls_dir.mkdir(parents=True, exist_ok=True)
 
     for clf_name in ("ridge", "svc"):
-        print(f"\n  Inter-site CV ({clf_name})...")
+        print(f"\n  Inter-site CV ({clf_name})...", flush=True)
         result = run_intersite_cv(timeseries, labels, sites, clf_name)
         result["experiment"] = "cpac_baseline"
         result["timestamp"] = datetime.now(timezone.utc).isoformat()
         with open(cls_dir / f"results_intersite_cpac_{clf_name}.json", "w") as f:
             json.dump(result, f, indent=2)
         print(f"    Mean accuracy: {result['mean_accuracy']:.4f} "
-              f"(+/- {result['std_accuracy']:.4f})")
+              f"(+/- {result['std_accuracy']:.4f})", flush=True)
 
-        print(f"  Intra-site CV ({clf_name})...")
+        print(f"  Intra-site CV ({clf_name})...", flush=True)
         result = run_intrasite_cv(timeseries, labels, sites, clf_name)
         result["experiment"] = "cpac_baseline"
         result["timestamp"] = datetime.now(timezone.utc).isoformat()
         with open(cls_dir / f"results_intrasite_cpac_{clf_name}.json", "w") as f:
             json.dump(result, f, indent=2)
         if result["mean_of_medians"] is not None:
-            print(f"    Mean of medians: {result['mean_of_medians']:.4f}")
+            print(f"    Mean of medians: {result['mean_of_medians']:.4f}", flush=True)
 
-    print(f"\nResults saved to {cls_dir}/")
+    print(f"\nResults saved to {cls_dir}/", flush=True)
 
 
 if __name__ == "__main__":

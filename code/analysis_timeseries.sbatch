@@ -14,18 +14,22 @@ set -euo pipefail
 # Usage:
 #   sbatch --array=1-N code/analysis_timeseries.sbatch \
 #       --project-root /path/to/abide_fmriprep \
-#       --subjects-file /path/to/subjects.txt
-#
-# subjects.txt: one participant_id per line (subjects that passed pre-screen QC).
+#       --subjects-file /path/to/subjects.txt \
+#       --variant v1
 # -------------------------------------------------------------------
+
+source "$(dirname "$0")/analysis_env.sh"
+export PATH="$ANALYSIS_ENV:$PATH"
 
 PROJECT_ROOT=""
 SUBJECTS_FILE=""
+VARIANT="v1"
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --project-root) PROJECT_ROOT="$2"; shift 2 ;;
         --subjects-file) SUBJECTS_FILE="$2"; shift 2 ;;
+        --variant) VARIANT="$2"; shift 2 ;;
         *) echo "Unknown argument: $1"; exit 1 ;;
     esac
 done
@@ -35,25 +39,22 @@ if [[ -z "$PROJECT_ROOT" ]] || [[ -z "$SUBJECTS_FILE" ]]; then
     exit 1
 fi
 
-# Read the subject ID for this array task
 SUBJECT=$(sed -n "${SLURM_ARRAY_TASK_ID}p" "$SUBJECTS_FILE")
 if [[ -z "$SUBJECT" ]]; then
     echo "ERROR: No subject at line $SLURM_ARRAY_TASK_ID in $SUBJECTS_FILE"
     exit 1
 fi
 
-# Activate analysis environment (Curnagl: PATH-based)
-export PATH=/work/FAC/FBM/DNF/oesteban/hcph/opt/mamba/envs/abide-analysis/bin:$PATH
-
 echo "=== Time series extraction ==="
 echo "Subject: $SUBJECT"
+echo "Variant: $VARIANT"
 echo "Array task: $SLURM_ARRAY_TASK_ID"
-echo "Project root: $PROJECT_ROOT"
 echo "Host: $(hostname)"
 echo "Date: $(date -Iseconds)"
 
 python3 "$PROJECT_ROOT/code/analysis/02_extract_timeseries.py" \
     --project-root "$PROJECT_ROOT" \
-    --participant-id "$SUBJECT"
+    --participant-id "$SUBJECT" \
+    --variant "$VARIANT"
 
 echo "=== Done ==="

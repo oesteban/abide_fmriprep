@@ -1,22 +1,20 @@
 #!/usr/bin/env python3
 """Per-subject time-series extraction with MSDL atlas.
 
-Loads fMRIPrep BOLD + confounds for one subject's selected run, applies
-confound regression and low-pass filtering, extracts MSDL atlas time series,
-computes atlas coverage and Pearson correlation.
+Supports three extraction variants:
+  v1: Single-stage ROI-level confound regression (24 Friston + 5 aCompCor
+      + cosine HP + 0.1 Hz low-pass via NiftiMapsMasker).
+  v2: v1 + 5 high-variance voxel PCs (top 2% variance) as additional
+      confound regressors.
+  v3: Two-stage denoising -- voxel-level clean_img (aCompCor + band-pass),
+      then ROI extraction + tCompCor regression (Abraham Section 2.3).
 
 Usage::
 
     python code/analysis/02_extract_timeseries.py \\
-        --project-root . --participant-id sub-v1s0x0050642 --run run-1
+        --project-root . --participant-id sub-v1s0x0050642 --variant v1
 
 Reads the selected run from qc_prescreen.tsv if --run is not specified.
-
-Output (BEP017 naming in derivatives/connectivity/):
-  - *_atlas-MSDL_stat-mean_timeseries.parquet
-  - *_atlas-MSDL_stat-mean_timeseries.json
-  - *_atlas-MSDL_stat-coverage_bold.tsv
-  - *_atlas-MSDL_stat-pearsoncorrelation_relmat.h5
 """
 
 from __future__ import annotations
@@ -32,9 +30,10 @@ import nibabel as nib
 import numpy as np
 import pandas as pd
 from nilearn.datasets import fetch_atlas_msdl
-from nilearn.image import resample_to_img
+from nilearn.image import clean_img, resample_to_img
 from nilearn.interfaces.fmriprep import load_confounds
 from nilearn.maskers import NiftiMapsMasker
+from nilearn.signal import clean, high_variance_confounds
 
 
 def _setup_path():
@@ -65,15 +64,17 @@ from _helpers import (
     software_versions,
 )
 
+#: Extraction variant descriptions (for sidecar metadata).
+VARIANT_DESCRIPTIONS = {
+    "v1": "single_stage_roi_level",
+    "v2": "single_stage_roi_level_plus_high_variance",
+    "v3": "two_stage_acompcor_then_tcompcor",
+}
+
 
 def compute_atlas_coverage(mask_path: Path, atlas_maps_img) -> np.ndarray:
-    """Compute per-region coverage of BOLD mask over MSDL atlas.
-
-    Returns a 1-D array of length N_MSDL_REGIONS with coverage fractions.
-    """
+    """Compute per-region coverage of BOLD mask over MSDL atlas."""
     mask_img = nib.load(str(mask_path))
-
-    # Resample atlas to mask grid
     atlas_resampled = resample_to_img(
         atlas_maps_img, mask_img, interpolation="continuous"
     )
@@ -83,27 +84,149 @@ def compute_atlas_coverage(mask_path: Path, atlas_maps_img) -> np.ndarray:
     coverage = np.zeros(N_MSDL_REGIONS)
     for i in range(N_MSDL_REGIONS):
         region_map = atlas_data[..., i]
-        # Weighted coverage: fraction of atlas weight inside mask
         total_weight = np.abs(region_map).sum()
         if total_weight > 0:
-            masked_weight = np.abs(region_map[mask_data]).sum()
-            coverage[i] = masked_weight / total_weight
+            coverage[i] = np.abs(region_map[mask_data]).sum() / total_weight
     return coverage
+
+
+# --------------------------------------------------------------------------- #
+# Extraction variants
+# --------------------------------------------------------------------------- #
+
+
+def _extract_v1(bold, mask, conf_path, tr, atlas, masker):
+    """v1: Single-stage ROI-level confound regression."""
+    confounds, sample_mask = load_confounds(
+        str(bold),
+        strategy=CONFOUND_STRATEGY,
+        motion=CONFOUND_MOTION,
+        compcor=CONFOUND_COMPCOR,
+        n_compcor=CONFOUND_N_COMPCOR,
+        demean=True,
+    )
+    timeseries = masker.fit_transform(
+        str(bold), confounds=confounds, sample_mask=sample_mask
+    )
+    sidecar_extra = {
+        "ConfoundStrategy": VARIANT_DESCRIPTIONS["v1"],
+        "Confounds": list(CONFOUND_STRATEGY),
+    }
+    return timeseries, sidecar_extra
+
+
+def _extract_v2(bold, mask, conf_path, tr, atlas, masker):
+    """v2: v1 + high-variance voxel confounds."""
+    confounds, sample_mask = load_confounds(
+        str(bold),
+        strategy=CONFOUND_STRATEGY,
+        motion=CONFOUND_MOTION,
+        compcor=CONFOUND_COMPCOR,
+        n_compcor=CONFOUND_N_COMPCOR,
+        demean=True,
+    )
+
+    # Compute high-variance voxel PCs
+    bold_img = nib.load(str(bold))
+    mask_img = nib.load(str(mask))
+    bold_data = bold_img.get_fdata()
+    mask_data = mask_img.get_fdata().astype(bool)
+    voxel_ts = bold_data[mask_data].T
+    if sample_mask is not None:
+        voxel_ts = voxel_ts[sample_mask]
+    hv_confounds = high_variance_confounds(voxel_ts, n_confounds=5, percentile=2.0)
+
+    hv_df = pd.DataFrame(
+        hv_confounds,
+        columns=[f"hv_comp_{i:02d}" for i in range(hv_confounds.shape[1])],
+        index=confounds.index if sample_mask is None else confounds.index[sample_mask],
+    )
+    confounds_combined = pd.concat([confounds, hv_df], axis=1)
+    del bold_data, voxel_ts
+
+    timeseries = masker.fit_transform(
+        str(bold), confounds=confounds_combined, sample_mask=sample_mask
+    )
+    sidecar_extra = {
+        "ConfoundStrategy": VARIANT_DESCRIPTIONS["v2"],
+        "Confounds": list(CONFOUND_STRATEGY) + ["high_variance"],
+        "HighVarianceNConfounds": 5,
+        "HighVariancePercentile": 2.0,
+    }
+    return timeseries, sidecar_extra
+
+
+def _extract_v3(bold, mask, conf_path, tr, atlas, masker):
+    """v3: Two-stage denoising (Abraham et al. 2017, Section 2.3)."""
+    # Stage 1: voxel-level cleaning
+    confounds_stage1, sample_mask = load_confounds(
+        str(bold),
+        strategy=CONFOUND_STRATEGY,
+        motion=CONFOUND_MOTION,
+        compcor=CONFOUND_COMPCOR,
+        n_compcor=CONFOUND_N_COMPCOR,
+        demean=True,
+    )
+    bold_clean = clean_img(
+        str(bold),
+        confounds=confounds_stage1,
+        low_pass=LOW_PASS,
+        high_pass=0.01,
+        t_r=tr,
+        detrend=True,
+        mask_img=str(mask),
+    )
+
+    # Stage 2: extract from clean BOLD (no filtering -- already done)
+    masker_clean = NiftiMapsMasker(
+        maps_img=atlas.maps,
+        standardize="zscore_sample",
+        detrend=False,
+        low_pass=None,
+        high_pass=None,
+        t_r=tr,
+    )
+    timeseries = masker_clean.fit_transform(bold_clean)
+
+    # Stage 2b: regress tCompCor
+    confounds_tsv = pd.read_csv(conf_path, sep="\t")
+    tcompcor_cols = sorted(
+        [c for c in confounds_tsv.columns if c.startswith("t_comp_cor_")]
+    )[:CONFOUND_N_COMPCOR]
+    if tcompcor_cols:
+        timeseries = clean(
+            timeseries,
+            confounds=confounds_tsv[tcompcor_cols].values,
+            detrend=False,
+            standardize="zscore_sample",
+        )
+
+    sidecar_extra = {
+        "ConfoundStrategy": VARIANT_DESCRIPTIONS["v3"],
+        "Stage1Confounds": list(CONFOUND_STRATEGY),
+        "Stage2Confounds": ["temporal_compcor"],
+    }
+    return timeseries, sidecar_extra
+
+
+_EXTRACT_FN = {"v1": _extract_v1, "v2": _extract_v2, "v3": _extract_v3}
+
+
+# --------------------------------------------------------------------------- #
+# Main extraction
+# --------------------------------------------------------------------------- #
 
 
 def extract_timeseries(
     subject_id: str,
     run_label: str,
     project_root: Path,
+    variant: str = "v1",
 ) -> dict:
-    """Extract MSDL time series for one subject/run.
-
-    Returns a dict with status info (pass/fail, output paths, QC metrics).
-    """
+    """Extract MSDL time series for one subject/run."""
     fmriprep_dir = derivatives_fmriprep(project_root)
-    conn_dir = derivatives_connectivity(project_root)
+    conn_dir = derivatives_connectivity(project_root, variant=variant)
 
-    # Find the confounds file for the selected run
     runs = find_confounds(subject_id, fmriprep_dir)
     conf_path = None
     for rl, cp in runs:
@@ -122,10 +245,8 @@ def extract_timeseries(
     if not mask.exists():
         return {"status": "error", "reason": "Brain mask not found"}
 
-    # Get TR from JSON sidecar
     tr = get_tr(conf_path)
 
-    # Fetch MSDL atlas
     atlas = fetch_atlas_msdl()
     atlas_maps_img = nib.load(atlas.maps)
     region_labels = list(atlas.labels)
@@ -141,64 +262,22 @@ def extract_timeseries(
             "mean_coverage": mean_coverage,
         }
 
-    # --- Two-stage denoising (replicating Abraham et al. 2017) ---
-    #
-    # Stage 1 (voxel-level): regress 24 motion + 5 aCompCor + cosine HP,
-    #          apply band-pass filter.  Mimics C-PAC voxel-level cleaning.
-    # Stage 2 (ROI-level):   extract MSDL time series from clean BOLD,
-    #          then regress 5 tCompCor (high-variance voxel PCs).
-    #          Mimics Abraham Section 2.3.
-
-    # Stage 1: load aCompCor confounds and clean at voxel level
-    confounds_stage1, sample_mask = load_confounds(
-        str(bold),
-        strategy=CONFOUND_STRATEGY,
-        motion=CONFOUND_MOTION,
-        compcor=CONFOUND_COMPCOR,
-        n_compcor=CONFOUND_N_COMPCOR,
-        demean=True,
-    )
-
-    from nilearn.image import clean_img
-    bold_clean = clean_img(
-        str(bold),
-        confounds=confounds_stage1,
-        low_pass=LOW_PASS,
-        high_pass=0.01,
-        t_r=tr,
-        detrend=True,
-        mask_img=str(mask),
-    )
-
-    # Stage 2: extract ROI time series from clean BOLD
+    # Build masker for v1/v2 (v3 builds its own internally)
     masker = NiftiMapsMasker(
         maps_img=atlas.maps,
         standardize="zscore_sample",
         detrend=False,
-        low_pass=None,   # already applied in stage 1
-        high_pass=None,   # already applied in stage 1
+        low_pass=LOW_PASS,
+        high_pass=None,  # handled by cosine confound regressors
         t_r=tr,
     )
-    timeseries = masker.fit_transform(bold_clean)
 
-    # Stage 2b: regress tCompCor from ROI signals (Abraham Section 2.3)
-    # Read tCompCor columns directly from fMRIPrep's confounds TSV
-    # (load_confounds requires high_pass with compcor, which we don't want here)
-    confounds_tsv = pd.read_csv(conf_path, sep="\t")
-    tcompcor_cols = [c for c in confounds_tsv.columns if c.startswith("t_comp_cor_")]
-    tcompcor_cols = sorted(tcompcor_cols)[:CONFOUND_N_COMPCOR]
-    confounds_stage2 = confounds_tsv[tcompcor_cols].values
-
-    from nilearn.signal import clean
-    timeseries = clean(
-        timeseries,
-        confounds=confounds_stage2,
-        detrend=False,
-        standardize="zscore_sample",
-    )
+    # Run the selected extraction variant
+    extract_fn = _EXTRACT_FN[variant]
+    timeseries, sidecar_extra = extract_fn(bold, mask, conf_path, tr, atlas, masker)
 
     # Compute per-subject Pearson correlation
-    correlation = np.corrcoef(timeseries.T)  # (39, 39)
+    correlation = np.corrcoef(timeseries.T)
 
     # --- Write outputs ---
     odir = output_dir(subject_id, conn_dir)
@@ -213,12 +292,10 @@ def extract_timeseries(
     sidecar = {
         "RepetitionTime": tr,
         "NumberOfVolumes": int(timeseries.shape[0]),
-        "NumberOfVolumesDiscarded": int(confounds_stage1.shape[0] - timeseries.shape[0]) if sample_mask is not None else 0,
         "Atlas": "MSDL",
         "NumberOfRegions": N_MSDL_REGIONS,
-        "ConfoundStrategy": "two_stage_acompcor_then_tcompcor",
-        "Stage1Confounds": list(CONFOUND_STRATEGY),
-        "Stage2Confounds": ["temporal_compcor"],
+        "Variant": variant,
+        **sidecar_extra,
         "ConfoundMotion": CONFOUND_MOTION,
         "ConfoundCompCor": CONFOUND_COMPCOR,
         "ConfoundNCompCor": CONFOUND_N_COMPCOR,
@@ -234,9 +311,7 @@ def extract_timeseries(
         json.dump(sidecar, f, indent=2)
 
     # 3. Coverage (TSV)
-    cov_df = pd.DataFrame(
-        {"region": region_labels, "coverage": coverage}
-    )
+    cov_df = pd.DataFrame({"region": region_labels, "coverage": coverage})
     cov_path = odir / f"{stem}_stat-coverage_bold.tsv"
     cov_df.to_csv(cov_path, sep="\t", index=False)
 
@@ -263,6 +338,12 @@ def main():
     parser.add_argument("--project-root", type=Path, default=Path("."))
     parser.add_argument("--participant-id", required=True)
     parser.add_argument(
+        "--variant",
+        choices=("v1", "v2", "v3"),
+        default="v1",
+        help="Extraction variant (default: v1).",
+    )
+    parser.add_argument(
         "--run",
         default=None,
         help="Run label (e.g., run-1). If omitted, reads from qc_prescreen.tsv.",
@@ -270,29 +351,32 @@ def main():
     args = parser.parse_args()
     root = args.project_root.resolve()
     sub_id = args.participant_id
+    variant = args.variant
 
     run_label = args.run
     if run_label is None:
-        # Read from pre-screen output
-        qc_path = derivatives_connectivity(root) / "qc_prescreen.tsv"
+        qc_path = derivatives_connectivity(root, variant=variant) / "qc_prescreen.tsv"
+        if not qc_path.exists():
+            # Fall back to default connectivity dir
+            qc_path = derivatives_connectivity(root) / "qc_prescreen.tsv"
         qc_df = pd.read_csv(qc_path, sep="\t")
         row = qc_df[qc_df["participant_id"] == sub_id]
         if row.empty:
-            print(f"ERROR: {sub_id} not found in {qc_path}", file=sys.stderr)
+            print(f"ERROR: {sub_id} not found in {qc_path}", file=sys.stderr, flush=True)
             sys.exit(1)
         row = row.iloc[0]
         if row["excluded_reason"] != "pass":
-            print(f"SKIP: {sub_id} excluded ({row['excluded_reason']})")
+            print(f"SKIP: {sub_id} excluded ({row['excluded_reason']})", flush=True)
             sys.exit(0)
         run_label = row["selected_run"]
 
-    print(f"Extracting: {sub_id} {run_label}")
-    result = extract_timeseries(sub_id, run_label, root)
-    print(f"  Status: {result['status']}")
+    print(f"Extracting: {sub_id} {run_label} (variant {variant})", flush=True)
+    result = extract_timeseries(sub_id, run_label, root, variant=variant)
+    print(f"  Status: {result['status']}", flush=True)
     if result["status"] == "pass":
-        print(f"  Volumes: {result['n_volumes']}, Coverage: {result['mean_coverage']}")
+        print(f"  Volumes: {result['n_volumes']}, Coverage: {result['mean_coverage']}", flush=True)
     elif "reason" in result:
-        print(f"  Reason: {result['reason']}")
+        print(f"  Reason: {result['reason']}", flush=True)
 
 
 if __name__ == "__main__":

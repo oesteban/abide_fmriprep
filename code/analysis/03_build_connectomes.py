@@ -71,7 +71,7 @@ def load_all_timeseries(
             continue
         ts = pd.read_parquet(ts_path).values
         if ts.shape[1] != N_MSDL_REGIONS:
-            print(f"WARNING: {sub_id} has {ts.shape[1]} regions, expected {N_MSDL_REGIONS}")
+            print(f"WARNING: {sub_id} has {ts.shape[1]} regions, expected {N_MSDL_REGIONS}", flush=True)
             continue
         timeseries_list.append(ts)
         subject_ids.append(sub_id)
@@ -85,21 +85,21 @@ def build_connectomes(project_root: Path):
     qc_path = conn_dir / "qc_prescreen.tsv"
     qc_df = pd.read_csv(qc_path, sep="\t")
 
-    print("Loading time series...")
+    print("Loading time series...", flush=True)
     timeseries_list, subject_ids = load_all_timeseries(conn_dir, qc_df)
-    print(f"  Loaded {len(timeseries_list)} subjects")
+    print(f"  Loaded {len(timeseries_list)} subjects", flush=True)
 
     if not timeseries_list:
-        print("ERROR: No time series found. Run 02_extract_timeseries.py first.")
+        print("ERROR: No time series found. Run 02_extract_timeseries.py first.", flush=True)
         sys.exit(1)
 
     # Compute tangent embedding
-    print("Computing tangent embedding...")
+    print("Computing tangent embedding...", flush=True)
     conn_measure = ConnectivityMeasure(
         kind="tangent", vectorize=True, discard_diagonal=True
     )
     connectomes = conn_measure.fit_transform(timeseries_list)  # (N, 741)
-    print(f"  Feature matrix shape: {connectomes.shape}")
+    print(f"  Feature matrix shape: {connectomes.shape}", flush=True)
     assert connectomes.shape[1] == N_TANGENT_FEATURES
 
     # Get the full tangent matrices (not vectorized) for per-subject output
@@ -111,7 +111,7 @@ def build_connectomes(project_root: Path):
     region_labels = list(atlas.labels)
 
     # --- Per-subject tangent relmat ---
-    print("Writing per-subject tangent relmat files...")
+    print("Writing per-subject tangent relmat files...", flush=True)
     for i, sub_id in enumerate(subject_ids):
         row = qc_df[qc_df["participant_id"] == sub_id].iloc[0]
         run_label = row["selected_run"]
@@ -129,7 +129,7 @@ def build_connectomes(project_root: Path):
             ds.attrs["n_regions"] = N_MSDL_REGIONS
 
     # --- Group-level stacked features ---
-    print("Writing group-level feature matrix...")
+    print("Writing group-level feature matrix...", flush=True)
     group_dir = conn_dir / "group"
     group_dir.mkdir(parents=True, exist_ok=True)
 
@@ -160,8 +160,8 @@ def build_connectomes(project_root: Path):
     with open(group_dir / "group_atlas-MSDL_stat-tangent_relmat.json", "w") as f:
         json.dump(meta, f, indent=2)
 
-    print(f"\nDone. {len(subject_ids)} subjects, {connectomes.shape[1]} features.")
-    print(f"  Group file: {group_dir / 'group_atlas-MSDL_stat-tangent_relmat.npz'}")
+    print(f"\nDone. {len(subject_ids)} subjects, {connectomes.shape[1]} features.", flush=True)
+    print(f"  Group file: {group_dir / 'group_atlas-MSDL_stat-tangent_relmat.npz'}", flush=True)
 
 
 def main():

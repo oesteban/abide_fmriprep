@@ -118,7 +118,7 @@ def prescreen(project_root: Path) -> pd.DataFrame:
                 qc["run_label"] = run_label
                 run_qc.append(qc)
             except Exception as exc:
-                print(f"  WARNING: {sub_id} {run_label}: {exc}", file=sys.stderr)
+                print(f"  WARNING: {sub_id} {run_label}: {exc}", file=sys.stderr, flush=True)
 
         if not run_qc:
             records.append({
@@ -176,7 +176,7 @@ def main():
     args = parser.parse_args()
     root = args.project_root.resolve()
 
-    print(f"Pre-screening subjects in {root}")
+    print(f"Pre-screening subjects in {root}", flush=True)
     df = prescreen(root)
 
     # Write output
@@ -197,19 +197,19 @@ def main():
     n_abide1 = (df_pass["source_dataset"] == "abide1").sum()
     n_abide2 = (df_pass["source_dataset"] == "abide2").sum()
 
-    print(f"\nPre-screen results written to {out_path}")
-    print(f"  Eligible subjects screened: {len(df)}")
-    print(f"  Passed: {n_pass} (ABIDE I: {n_abide1}, ABIDE II: {n_abide2})")
-    print(f"  Excluded: {n_excluded}")
-    print(f"    - No fMRIPrep output: {n_no_output}")
-    print(f"    - High mean FD (>{MAX_MEAN_FD} mm): {n_high_fd}")
-    print(f"    - Low usable volumes (<{MIN_USABLE_VOLUMES}): {n_low_vol}")
+    print(f"\nPre-screen results written to {out_path}", flush=True)
+    print(f"  Eligible subjects screened: {len(df)}", flush=True)
+    print(f"  Passed: {n_pass} (ABIDE I: {n_abide1}, ABIDE II: {n_abide2})", flush=True)
+    print(f"  Excluded: {n_excluded}", flush=True)
+    print(f"    - No fMRIPrep output: {n_no_output}", flush=True)
+    print(f"    - High mean FD (>{MAX_MEAN_FD} mm): {n_high_fd}", flush=True)
+    print(f"    - Low usable volumes (<{MIN_USABLE_VOLUMES}): {n_low_vol}", flush=True)
 
     # Multi-run stats
     multi_run = df[df["n_runs_available"] > 1]
     if len(multi_run) > 0:
-        print(f"\n  Multi-run subjects: {len(multi_run)}")
-        print(f"    Selected non-run-1: {(multi_run['selected_run'] != 'run-1').sum()}")
+        print(f"\n  Multi-run subjects: {len(multi_run)}", flush=True)
+        print(f"    Selected non-run-1: {(multi_run['selected_run'] != 'run-1').sum()}", flush=True)
 
 
 if __name__ == "__main__":

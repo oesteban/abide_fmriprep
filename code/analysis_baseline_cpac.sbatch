@@ -8,10 +8,8 @@
 
 set -euo pipefail
 
-# -------------------------------------------------------------------
-# Baseline: download C-PAC preprocessed ABIDE I from PCP, extract
-# MSDL time series, run tangent + Ridge/SVC classification.
-# -------------------------------------------------------------------
+source "$(dirname "$0")/analysis_env.sh"
+export PATH="$ANALYSIS_ENV:$PATH"
 
 PROJECT_ROOT=""
 
@@ -27,22 +25,17 @@ if [[ -z "$PROJECT_ROOT" ]]; then
     exit 1
 fi
 
-# Activate analysis environment (Curnagl: PATH-based)
-export PATH=/work/FAC/FBM/DNF/oesteban/hcph/opt/mamba/envs/abide-analysis/bin:$PATH
-
-# Use scratch for PCP download cache (large files, ~50 GB)
-DATA_DIR="/scratch/oesteban/nilearn_data"
-mkdir -p "$DATA_DIR"
+mkdir -p "$NILEARN_DATA"
 
 echo "=== C-PAC Baseline ==="
 echo "Project root: $PROJECT_ROOT"
-echo "Data dir: $DATA_DIR"
+echo "Data dir: $NILEARN_DATA"
 echo "Host: $(hostname)"
 echo "Date: $(date -Iseconds)"
 
 python3 "$PROJECT_ROOT/code/analysis/06_baseline_cpac.py" \
     --project-root "$PROJECT_ROOT" \
-    --data-dir "$DATA_DIR"
+    --data-dir "$NILEARN_DATA"
 
 echo "=== Done ==="
 echo "Date: $(date -Iseconds)"

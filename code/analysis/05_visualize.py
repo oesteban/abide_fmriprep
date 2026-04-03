@@ -58,7 +58,7 @@ def plot_intersite_comparison(results: dict, fig_dir: Path):
             our_inter_std = res["std_accuracy"]
             break
     else:
-        print("WARNING: No ABIDE I inter-site ridge results found")
+        print("WARNING: No ABIDE I inter-site ridge results found", flush=True)
         return
 
     labels = ["Abraham et al.\n(C-PAC, N=871)", "This study\n(fMRIPrep, ABIDE I)"]
@@ -81,7 +81,7 @@ def plot_intersite_comparison(results: dict, fig_dir: Path):
     fig.savefig(fig_dir / "intersite_comparison.png", dpi=150)
     fig.savefig(fig_dir / "intersite_comparison.svg")
     plt.close(fig)
-    print(f"  Saved intersite_comparison.{{png,svg}}")
+    print(f"  Saved intersite_comparison.{{png,svg}}", flush=True)
 
 
 def plot_persite_accuracy(results: dict, fig_dir: Path):
@@ -119,7 +119,7 @@ def plot_persite_accuracy(results: dict, fig_dir: Path):
         fig.savefig(fig_dir / f"persite_accuracy_{experiment}.png", dpi=150)
         fig.savefig(fig_dir / f"persite_accuracy_{experiment}.svg")
         plt.close(fig)
-        print(f"  Saved persite_accuracy_{experiment}.{{png,svg}}")
+        print(f"  Saved persite_accuracy_{experiment}.{{png,svg}}", flush=True)
 
 
 def plot_intrasite_boxplot(results: dict, fig_dir: Path):
@@ -156,7 +156,7 @@ def plot_intrasite_boxplot(results: dict, fig_dir: Path):
         fig.savefig(fig_dir / f"intrasite_accuracy_{experiment}.png", dpi=150)
         fig.savefig(fig_dir / f"intrasite_accuracy_{experiment}.svg")
         plt.close(fig)
-        print(f"  Saved intrasite_accuracy_{experiment}.{{png,svg}}")
+        print(f"  Saved intrasite_accuracy_{experiment}.{{png,svg}}", flush=True)
 
 
 def write_comparison_table(results: dict, fig_dir: Path):
@@ -189,11 +189,11 @@ def write_comparison_table(results: dict, fig_dir: Path):
     df = pd.DataFrame([abraham, ours])
     csv_path = fig_dir / "accuracy_comparison_table.csv"
     df.to_csv(csv_path, index=False)
-    print(f"  Saved accuracy_comparison_table.csv")
+    print(f"  Saved accuracy_comparison_table.csv", flush=True)
 
     # Also print to stdout
-    print("\n  Comparison with Abraham et al. (2017):")
-    print(df.to_string(index=False))
+    print("\n  Comparison with Abraham et al. (2017):", flush=True)
+    print(df.to_string(index=False), flush=True)
 
 
 def write_consort_flowchart(project_root: Path, fig_dir: Path):
@@ -202,7 +202,7 @@ def write_consort_flowchart(project_root: Path, fig_dir: Path):
     qc_path = conn_dir / "qc_prescreen.tsv"
 
     if not qc_path.exists():
-        print("  WARNING: qc_prescreen.tsv not found, skipping CONSORT flowchart")
+        print("  WARNING: qc_prescreen.tsv not found, skipping CONSORT flowchart", flush=True)
         return
 
     qc_df = pd.read_csv(qc_path, sep="\t")
@@ -247,8 +247,8 @@ Included in analysis:                {n_pass:>5}
     flowchart_path = fig_dir / "consort_flowchart.txt"
     with open(flowchart_path, "w") as f:
         f.write(flowchart)
-    print(f"  Saved consort_flowchart.txt")
-    print(flowchart)
+    print(f"  Saved consort_flowchart.txt", flush=True)
+    print(flowchart, flush=True)
 
 
 def main():
@@ -267,10 +267,10 @@ def main():
     # Load results
     results = load_classification_results(cls_dir)
     if not results:
-        print("ERROR: No classification results found. Run 04_classify.py first.")
+        print("ERROR: No classification results found. Run 04_classify.py first.", flush=True)
         sys.exit(1)
 
-    print("Generating visualizations...")
+    print("Generating visualizations...", flush=True)
 
     # 1. Comparison table
     write_comparison_table(results, fig_dir)
@@ -287,7 +287,7 @@ def main():
     # 5. CONSORT flowchart
     write_consort_flowchart(root, fig_dir)
 
-    print(f"\nAll figures saved to {fig_dir}/")
+    print(f"\nAll figures saved to {fig_dir}/", flush=True)
 
 
 if __name__ == "__main__":
