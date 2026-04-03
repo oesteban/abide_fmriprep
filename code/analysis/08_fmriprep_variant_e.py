@@ -6,10 +6,10 @@ series already extracted in derivatives/connectivity/:
   - Group-level confound regression (site + age + sex)
   - Nested CV hyperparameter tuning (Ridge alpha, SVC C)
   - LedoitWolf(assume_centered=True) for tangent embedding
-  - LeaveOneGroupOut CV (since Abraham's fold assignments don't map to
-    our fMRIPrep subject IDs)
+  - Abraham's 10-fold CV splits for ABIDE I (matched via source_subject_id)
+  - LOGO for ABIDE I+II combined (no Abraham splits for ABIDE II)
 
-Runs two experiments: ABIDE I only and ABIDE I+II combined.
+Runs two experiments: ABIDE I (with Abraham's CV) and ABIDE I+II (LOGO).
 
 Usage::
 
@@ -30,7 +30,7 @@ from nilearn.connectome import ConnectivityMeasure
 from sklearn.base import BaseEstimator, TransformerMixin
 from sklearn.covariance import LedoitWolf
 from sklearn.linear_model import LinearRegression, RidgeClassifier
-from sklearn.model_selection import GridSearchCV, LeaveOneGroupOut
+from sklearn.model_selection import GridSearchCV, LeaveOneGroupOut, PredefinedSplit
 from sklearn.svm import SVC
 
 
@@ -85,6 +85,7 @@ def load_fmriprep_timeseries(project_root: Path):
     sexes = []
     datasets = []
     subject_ids = []
+    source_subject_ids = []  # original ABIDE IDs for CV split matching
 
     for _, row in qc_pass.iterrows():
         sub_id = row["participant_id"]
@@ -109,6 +110,7 @@ def load_fmriprep_timeseries(project_root: Path):
         sites.append(f"{row['source_dataset']}_{row['source_site']}")
         datasets.append(row["source_dataset"])
         subject_ids.append(sub_id)
+        source_subject_ids.append(int(p["source_subject_id"]))
 
         # Age and sex (with fallback for missing)
         age = float(p["age"]) if pd.notna(p.get("age")) else 25.0
@@ -126,23 +128,53 @@ def load_fmriprep_timeseries(project_root: Path):
         "ages": np.array(ages),
         "sexes": np.array(sexes),
         "subject_ids": subject_ids,
+        "source_subject_ids": np.array(source_subject_ids),
     }
 
 
-def run_variant_e(data, experiment_label, classifier_name="ridge"):
-    """Run variant E classification: confound reg + tuning + LW centered + LOGO."""
+def run_variant_e(data, experiment_label, classifier_name="ridge",
+                   cv_splits=None):
+    """Run variant E classification: confound reg + tuning + LW centered.
+
+    Parameters
+    ----------
+    cv_splits : dict, optional
+        Abraham's fold assignments {source_subject_id: fold_idx}.
+        If provided, filters to matched subjects and uses PredefinedSplit.
+        If None, uses LeaveOneGroupOut.
+    """
     timeseries = data["timeseries"]
     labels = data["labels"]
     sites = data["sites"]
     ages = data["ages"]
     sexes = data["sexes"]
 
+    # Apply CV splits filter if provided
+    if cv_splits is not None:
+        source_ids = data["source_subject_ids"]
+        fold_ids = np.array([cv_splits.get(int(sid), -1) for sid in source_ids])
+        mask = fold_ids >= 0
+        print(f"    {mask.sum()}/{len(mask)} subjects matched to CV splits", flush=True)
+        timeseries = [timeseries[i] for i in range(len(timeseries)) if mask[i]]
+        labels = labels[mask]
+        sites = sites[mask]
+        ages = ages[mask]
+        sexes = sexes[mask]
+        fold_ids = fold_ids[mask]
+        cv = PredefinedSplit(fold_ids)
+        cv_label = "abraham_10fold"
+    else:
+        cv = LeaveOneGroupOut()
+        fold_ids = None
+        cv_label = "leave_one_group_out"
+
     unique_sites = np.unique(sites)
     site_to_idx = {s: i for i, s in enumerate(unique_sites)}
-    logo = LeaveOneGroupOut()
 
     fold_results = []
-    for fold_i, (train_idx, test_idx) in enumerate(logo.split(timeseries, labels, groups=sites)):
+    splits = cv.split(timeseries, labels, groups=sites if fold_ids is None else None)
+    n_folds = len(unique_sites) if fold_ids is None else len(np.unique(fold_ids))
+    for fold_i, (train_idx, test_idx) in enumerate(splits):
         test_site = sites[test_idx[0]]
         ts_train = [timeseries[i] for i in train_idx]
         ts_test = [timeseries[i] for i in test_idx]
@@ -198,19 +230,19 @@ def run_variant_e(data, experiment_label, classifier_name="ridge"):
 
         if (fold_i + 1) % 5 == 0:
             accs_so_far = [r["accuracy"] for r in fold_results]
-            print(f"    Fold {fold_i + 1}/{len(unique_sites)}: "
+            print(f"    Fold {fold_i + 1}/{n_folds}: "
                   f"running mean = {np.mean(accs_so_far):.1%}", flush=True)
 
     accuracies = [r["accuracy"] for r in fold_results]
     return {
         "experiment": experiment_label,
         "variant": "E_full_replication",
-        "cv_scheme": "leave_one_group_out",
+        "cv_scheme": cv_label,
         "classifier": classifier_name,
         "confound_regression": True,
         "tune_hyperparams": True,
         "assume_centered": True,
-        "n_folds": len(unique_sites),
+        "n_folds": n_folds,
         "n_subjects": len(labels),
         "n_sites": len(unique_sites),
         "mean_accuracy": round(float(np.mean(accuracies)), 6),
@@ -223,6 +255,8 @@ def run_variant_e(data, experiment_label, classifier_name="ridge"):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--project-root", type=Path, default=Path("."))
+    parser.add_argument("--data-dir", type=str, default=None,
+                        help="Cache directory for CV splits download")
     args = parser.parse_args()
     root = args.project_root.resolve()
 
@@ -231,10 +265,22 @@ def main():
     print(f"  ASD: {(data['labels'] == 1).sum()}, TC: {(data['labels'] == 0).sum()}", flush=True)
     print(f"  Sites: {len(np.unique(data['sites']))}", flush=True)
 
+    # Fetch Abraham's CV splits
+    from importlib.util import spec_from_file_location, module_from_spec
+    faithful_path = Path(__file__).resolve().parent / "07_faithful_replication.py"
+    spec = spec_from_file_location("faithful", faithful_path)
+    faithful = module_from_spec(spec)
+    spec.loader.exec_module(faithful)
+
+    print("\nFetching Abraham's CV splits...", flush=True)
+    cv_splits = faithful.fetch_abraham_cv_splits(
+        Path(args.data_dir) if args.data_dir else None
+    )
+
     cls_dir = derivatives_connectivity(root) / "classification"
     cls_dir.mkdir(parents=True, exist_ok=True)
 
-    # --- Experiment 1: ABIDE I only ---
+    # --- Experiment 1: ABIDE I with Abraham's 10-fold CV ---
     abide1_mask = data["datasets"] == "abide1"
     data_a1 = {
         "timeseries": [data["timeseries"][i] for i in range(len(data["timeseries"])) if abide1_mask[i]],
@@ -242,26 +288,30 @@ def main():
         "sites": data["sites"][abide1_mask],
         "ages": data["ages"][abide1_mask],
         "sexes": data["sexes"][abide1_mask],
+        "source_subject_ids": data["source_subject_ids"][abide1_mask],
     }
     n_a1 = len(data_a1["timeseries"])
-    print(f"\n=== ABIDE I only (N={n_a1}, {len(np.unique(data_a1['sites']))} sites) ===", flush=True)
+    print(f"\n=== ABIDE I with Abraham's 10-fold CV (N={n_a1} before matching) ===", flush=True)
 
     for clf_name in ("ridge", "svc"):
         print(f"\n  Variant E ({clf_name})...", flush=True)
-        result = run_variant_e(data_a1, "fmriprep_abide1", clf_name)
-        with open(cls_dir / f"results_variantE_fmriprep_abide1_{clf_name}.json", "w") as f:
+        result = run_variant_e(data_a1, "fmriprep_abide1_abraham_cv", clf_name,
+                               cv_splits=cv_splits)
+        with open(cls_dir / f"results_variantE_fmriprep_abide1_10fold_{clf_name}.json", "w") as f:
             json.dump(result, f, indent=2)
         print(f"    Mean accuracy: {result['mean_accuracy']:.1%} "
               f"(+/- {result['std_accuracy']:.1%})", flush=True)
 
-    # --- Experiment 2: ABIDE I + II ---
+    # --- Experiment 2: ABIDE I+II with LOGO ---
     n_all = len(data["timeseries"])
-    print(f"\n=== ABIDE I+II (N={n_all}, {len(np.unique(data['sites']))} sites) ===", flush=True)
+    print(f"\n=== ABIDE I+II with LOGO (N={n_all}, {len(np.unique(data['sites']))} sites) ===",
+          flush=True)
 
     for clf_name in ("ridge", "svc"):
         print(f"\n  Variant E ({clf_name})...", flush=True)
-        result = run_variant_e(data, "fmriprep_both", clf_name)
-        with open(cls_dir / f"results_variantE_fmriprep_both_{clf_name}.json", "w") as f:
+        result = run_variant_e(data, "fmriprep_both_logo", clf_name,
+                               cv_splits=None)
+        with open(cls_dir / f"results_variantE_fmriprep_both_logo_{clf_name}.json", "w") as f:
             json.dump(result, f, indent=2)
         print(f"    Mean accuracy: {result['mean_accuracy']:.1%} "
               f"(+/- {result['std_accuracy']:.1%})", flush=True)
