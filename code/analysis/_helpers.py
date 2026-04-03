@@ -2,9 +2,22 @@
 
 from __future__ import annotations
 
+import io
 import json
 import re
+import zipfile
 from pathlib import Path
+from urllib.request import urlopen
+
+import h5py
+import nilearn
+import numpy as np
+import pandas as pd
+import sklearn
+from nilearn.connectome import ConnectivityMeasure
+from sklearn.base import BaseEstimator, TransformerMixin
+from sklearn.covariance import LedoitWolf
+from sklearn.linear_model import LinearRegression
 
 # --------------------------------------------------------------------------- #
 # Constants
@@ -23,6 +36,12 @@ MIN_ATLAS_COVERAGE = 0.80  # fraction
 
 #: fMRIPrep output space used for the analysis.
 SPACE = "MNI152NLin2009cAsym"
+
+#: Fixed random seed for reproducibility.
+RANDOM_STATE = 42
+
+#: URL for Abraham et al. (2017) cross-validation splits.
+CV_SPLITS_URL = "https://team.inria.fr/parietal/files/2016/04/cv_abide.zip"
 
 #: Confounds strategy for nilearn's load_confounds.
 CONFOUND_STRATEGY = ("motion", "compcor", "high_pass")
@@ -48,9 +67,17 @@ def derivatives_fmriprep(root: Path | None = None) -> Path:
     return (root or project_root()) / "derivatives" / "fmriprep-25.2"
 
 
-def derivatives_connectivity(root: Path | None = None) -> Path:
-    """Return the connectivity derivatives path."""
-    return (root or project_root()) / "derivatives" / "connectivity"
+def derivatives_connectivity(root: Path | None = None, variant: str = "v1") -> Path:
+    """Return the connectivity derivatives path.
+
+    Parameters
+    ----------
+    root : Path, optional
+        Project root directory. Defaults to auto-detected root.
+    variant : str
+        Connectivity variant suffix (default ``"v1"``).
+    """
+    return (root or project_root()) / "derivatives" / f"connectivity-{variant}"
 
 
 def participants_tsv(root: Path | None = None) -> Path:
@@ -171,15 +198,11 @@ def output_dir(
 
 def load_participants(root: Path | None = None):
     """Load participants.tsv as a pandas DataFrame."""
-    import pandas as pd
-
     return pd.read_csv(participants_tsv(root), sep="\t")
 
 
 def load_exclusions(root: Path | None = None):
     """Load exclusions.tsv as a set of participant_ids."""
-    import pandas as pd
-
     df = pd.read_csv(exclusions_tsv(root), sep="\t")
     return set(df["participant_id"])
 
@@ -189,8 +212,6 @@ def eligible_subjects(root: Path | None = None):
 
     Excludes preprocessing failures and subjects without a diagnostic group.
     """
-    import pandas as pd
-
     df = load_participants(root)
     excl = load_exclusions(root)
     df = df[~df["participant_id"].isin(excl)]
@@ -211,3 +232,143 @@ def site_prefix(subject_id: str) -> str:
     if not m:
         raise ValueError(f"Cannot extract site prefix from {subject_id!r}")
     return m.group(1)
+
+
+# --------------------------------------------------------------------------- #
+# Tangent embedding transformer
+# --------------------------------------------------------------------------- #
+
+
+class TangentEmbeddingTransformer(BaseEstimator, TransformerMixin):
+    """Sklearn-compatible tangent embedding wrapper.
+
+    Re-estimates the geometric mean from training data during fit() to
+    prevent information leakage in cross-validation.
+
+    Parameters
+    ----------
+    assume_centered : bool
+        Passed to :class:`~sklearn.covariance.LedoitWolf`.
+    """
+
+    def __init__(self, assume_centered=False):
+        self.assume_centered = assume_centered
+
+    def fit(self, X, y=None):
+        self._conn = ConnectivityMeasure(
+            cov_estimator=LedoitWolf(assume_centered=self.assume_centered),
+            kind="tangent",
+            vectorize=True,
+            discard_diagonal=True,
+        )
+        self._conn.fit(X)
+        return self
+
+    def transform(self, X):
+        return self._conn.transform(X)
+
+
+# --------------------------------------------------------------------------- #
+# Confound regression
+# --------------------------------------------------------------------------- #
+
+
+def regress_confounds(X_train, X_test, confounds_train, confounds_test):
+    """Regress out confounds (site, age, sex) from tangent features.
+
+    Fits on training data only to avoid leakage.
+    """
+    reg = LinearRegression().fit(confounds_train, X_train)
+    X_train_clean = X_train - reg.predict(confounds_train)
+    X_test_clean = X_test - reg.predict(confounds_test)
+    return X_train_clean, X_test_clean
+
+
+# --------------------------------------------------------------------------- #
+# Abraham CV splits
+# --------------------------------------------------------------------------- #
+
+
+def fetch_abraham_cv_splits(data_dir: Path | None = None) -> dict:
+    """Download and parse Abraham's 10-fold CV splits.
+
+    The file is a wide CSV with columns: subsamble, then pairs of
+    (train, test) columns for each fold and CV scheme. We extract the
+    ``folds_loso`` columns (inter-site leave-one-site-out, 10 folds).
+
+    Returns a dict mapping subject_id (int) -> fold_index (0-9),
+    where fold_index is the fold in which the subject is in the TEST set.
+    """
+    cache_path = (data_dir or Path.home() / "nilearn_data") / "cv_abide"
+    csv_path = cache_path / "cv_abide.csv"
+
+    if not csv_path.exists():
+        print(f"  Downloading CV splits from {CV_SPLITS_URL}...", flush=True)
+        cache_path.mkdir(parents=True, exist_ok=True)
+        response = urlopen(CV_SPLITS_URL)
+        # The URL serves a CSV directly (despite .zip extension in some references)
+        data = response.read()
+        # Try zip first, fall back to raw CSV
+        try:
+            with zipfile.ZipFile(io.BytesIO(data)) as zf:
+                zf.extractall(cache_path)
+        except zipfile.BadZipFile:
+            csv_path.write_bytes(data)
+        print("  Downloaded.", flush=True)
+    else:
+        print("  CV splits already cached.", flush=True)
+
+    # Parse the wide CSV
+    # Row 0: header with column group names (subsamble, folds_sss, folds_loso, ...)
+    # Row 1: iter numbers (0,0,1,1,...,9,9)
+    # Row 2: type (train, test, train, test, ...)
+    # Row 3: empty
+    # Rows 4+: subject_id, 0/1, 0/1, ... (1=in this set, 0=not)
+    df = pd.read_csv(csv_path, header=None)
+
+    # Find the folds_loso columns (inter-site CV)
+    header = df.iloc[0].values
+    iters = df.iloc[1].values
+    types = df.iloc[2].values
+
+    # Find column indices for folds_loso test sets
+    loso_test_cols = {}  # fold_idx -> column_index
+    for col_idx in range(1, len(header)):
+        if str(header[col_idx]) == "folds_loso" and str(types[col_idx]) == "test":
+            fold_idx = int(iters[col_idx])
+            loso_test_cols[fold_idx] = col_idx
+
+    print(f"  Found {len(loso_test_cols)} LOSO test folds", flush=True)
+
+    # Build subject -> fold mapping
+    subject_to_fold = {}
+    for row_idx in range(4, len(df)):
+        sub_id = df.iloc[row_idx, 0]
+        if pd.isna(sub_id) or str(sub_id).strip() == "":
+            continue
+        sub_id = int(float(sub_id))
+        for fold_idx, col_idx in loso_test_cols.items():
+            val = df.iloc[row_idx, col_idx]
+            if not pd.isna(val) and int(float(val)) == 1:
+                subject_to_fold[sub_id] = fold_idx
+                break
+
+    n_folds = len(set(subject_to_fold.values())) if subject_to_fold else 0
+    print(f"  Mapped {len(subject_to_fold)} subjects to {n_folds} folds", flush=True)
+    return subject_to_fold
+
+
+# --------------------------------------------------------------------------- #
+# Software versions
+# --------------------------------------------------------------------------- #
+
+
+def software_versions() -> dict:
+    """Collect software version strings."""
+    return {
+        "nilearn": nilearn.__version__,
+        "scikit-learn": sklearn.__version__,
+        "numpy": np.__version__,
+        "pandas": pd.__version__,
+        "h5py": h5py.__version__,
+    }

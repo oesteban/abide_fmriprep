@@ -62,6 +62,7 @@ from _helpers import (
     find_confounds,
     get_tr,
     output_dir,
+    software_versions,
 )
 
 
@@ -225,7 +226,7 @@ def extract_timeseries(
         "Standardize": "zscore_sample",
         "MeanAtlasCoverage": round(mean_coverage, 4),
         "SelectedRun": run_label,
-        "SoftwareVersions": _software_versions(),
+        "SoftwareVersions": software_versions(),
         "Timestamp": datetime.now(timezone.utc).isoformat(),
     }
     sidecar_path = odir / f"{stem}_stat-mean_timeseries.json"
@@ -254,19 +255,6 @@ def extract_timeseries(
         "n_volumes": int(timeseries.shape[0]),
         "mean_coverage": round(mean_coverage, 4),
         "timeseries_path": str(ts_path),
-    }
-
-
-def _software_versions() -> dict:
-    """Collect software version strings."""
-    import nilearn
-    import sklearn
-
-    return {
-        "nilearn": nilearn.__version__,
-        "scikit-learn": sklearn.__version__,
-        "numpy": np.__version__,
-        "pandas": pd.__version__,
     }
 
 

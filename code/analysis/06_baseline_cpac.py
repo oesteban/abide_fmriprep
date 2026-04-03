@@ -22,10 +22,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 import numpy as np
-from nilearn.connectome import ConnectivityMeasure
 from nilearn.datasets import fetch_abide_pcp, fetch_atlas_msdl
 from nilearn.maskers import NiftiMapsMasker
-from sklearn.base import BaseEstimator, TransformerMixin
 from sklearn.linear_model import RidgeClassifier
 from sklearn.model_selection import LeaveOneGroupOut, StratifiedShuffleSplit
 from sklearn.pipeline import Pipeline
@@ -40,23 +38,7 @@ def _setup_path():
 
 _setup_path()
 
-from _helpers import N_MSDL_REGIONS, derivatives_connectivity
-
-
-class TangentEmbeddingTransformer(BaseEstimator, TransformerMixin):
-    """Re-fits geometric mean per CV fold."""
-
-    def __init__(self):
-        self._conn = ConnectivityMeasure(
-            kind="tangent", vectorize=True, discard_diagonal=True
-        )
-
-    def fit(self, X, y=None):
-        self._conn.fit(X)
-        return self
-
-    def transform(self, X):
-        return self._conn.transform(X)
+from _helpers import N_MSDL_REGIONS, RANDOM_STATE, TangentEmbeddingTransformer, derivatives_connectivity
 
 
 def extract_cpac_timeseries(data_dir: str | None = None):
@@ -234,6 +216,8 @@ def main():
                         help="Cache directory for PCP downloads (default: ~/nilearn_data)")
     args = parser.parse_args()
     root = args.project_root.resolve()
+
+    np.random.seed(RANDOM_STATE)
 
     # Extract time series from C-PAC data
     timeseries, labels, sites, subject_ids = extract_cpac_timeseries(args.data_dir)

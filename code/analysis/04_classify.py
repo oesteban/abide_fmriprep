@@ -23,8 +23,6 @@ from pathlib import Path
 
 import numpy as np
 import pandas as pd
-from nilearn.connectome import ConnectivityMeasure
-from sklearn.base import BaseEstimator, TransformerMixin
 from sklearn.linear_model import RidgeClassifier
 from sklearn.model_selection import LeaveOneGroupOut, StratifiedShuffleSplit
 from sklearn.pipeline import Pipeline
@@ -39,49 +37,7 @@ def _setup_path():
 
 _setup_path()
 
-from _helpers import N_MSDL_REGIONS, derivatives_connectivity
-
-
-# --------------------------------------------------------------------------- #
-# TangentEmbeddingTransformer
-# --------------------------------------------------------------------------- #
-
-
-class TangentEmbeddingTransformer(BaseEstimator, TransformerMixin):
-    """Sklearn-compatible tangent embedding wrapper.
-
-    Re-estimates the geometric mean from training data during fit() to
-    prevent information leakage in cross-validation.
-    """
-
-    def __init__(self):
-        self._conn = ConnectivityMeasure(
-            kind="tangent", vectorize=True, discard_diagonal=True
-        )
-
-    def fit(self, X, y=None):
-        """Fit the geometric mean from training time series.
-
-        Parameters
-        ----------
-        X : list of (T_i, 39) arrays
-            Training subjects' time series.
-        """
-        self._conn.fit(X)
-        return self
-
-    def transform(self, X):
-        """Project time series to tangent space.
-
-        Parameters
-        ----------
-        X : list of (T_i, 39) arrays
-
-        Returns
-        -------
-        connectomes : (N, 741) array
-        """
-        return self._conn.transform(X)
+from _helpers import N_MSDL_REGIONS, RANDOM_STATE, TangentEmbeddingTransformer, derivatives_connectivity
 
 
 # --------------------------------------------------------------------------- #
@@ -223,6 +179,7 @@ def _make_classifier(name: str):
 
 def classify(project_root: Path):
     """Run all classification experiments."""
+    np.random.seed(RANDOM_STATE)
     conn_dir = derivatives_connectivity(project_root)
     qc_path = conn_dir / "qc_prescreen.tsv"
 

@@ -26,10 +26,7 @@ from pathlib import Path
 
 import numpy as np
 import pandas as pd
-from nilearn.connectome import ConnectivityMeasure
-from sklearn.base import BaseEstimator, TransformerMixin
-from sklearn.covariance import LedoitWolf
-from sklearn.linear_model import LinearRegression, RidgeClassifier
+from sklearn.linear_model import RidgeClassifier
 from sklearn.model_selection import GridSearchCV, LeaveOneGroupOut, PredefinedSplit
 from sklearn.svm import SVC
 
@@ -44,27 +41,15 @@ _setup_path()
 
 from _helpers import (
     N_MSDL_REGIONS,
+    RANDOM_STATE,
+    TangentEmbeddingTransformer,
     bep017_stem,
     derivatives_connectivity,
     eligible_subjects,
+    fetch_abraham_cv_splits,
+    regress_confounds,
     site_prefix,
 )
-
-
-class TangentEmbeddingTransformer(BaseEstimator, TransformerMixin):
-    def __init__(self, assume_centered=True):
-        self.assume_centered = assume_centered
-
-    def fit(self, X, y=None):
-        self._conn = ConnectivityMeasure(
-            cov_estimator=LedoitWolf(assume_centered=self.assume_centered),
-            kind="tangent", vectorize=True, discard_diagonal=True,
-        )
-        self._conn.fit(X)
-        return self
-
-    def transform(self, X):
-        return self._conn.transform(X)
 
 
 def load_fmriprep_timeseries(project_root: Path):
@@ -200,9 +185,7 @@ def run_variant_e(data, experiment_label, classifier_name="ridge",
 
         conf_train = _build_confounds(train_idx)
         conf_test = _build_confounds(test_idx)
-        reg = LinearRegression().fit(conf_train, X_train)
-        X_train = X_train - reg.predict(conf_train)
-        X_test = X_test - reg.predict(conf_test)
+        X_train, X_test = regress_confounds(X_train, X_test, conf_train, conf_test)
 
         # Classifier with nested CV tuning
         if classifier_name == "ridge":
@@ -266,14 +249,8 @@ def main():
     print(f"  Sites: {len(np.unique(data['sites']))}", flush=True)
 
     # Fetch Abraham's CV splits
-    from importlib.util import spec_from_file_location, module_from_spec
-    faithful_path = Path(__file__).resolve().parent / "07_faithful_replication.py"
-    spec = spec_from_file_location("faithful", faithful_path)
-    faithful = module_from_spec(spec)
-    spec.loader.exec_module(faithful)
-
     print("\nFetching Abraham's CV splits...", flush=True)
-    cv_splits = faithful.fetch_abraham_cv_splits(
+    cv_splits = fetch_abraham_cv_splits(
         Path(args.data_dir) if args.data_dir else None
     )
 
