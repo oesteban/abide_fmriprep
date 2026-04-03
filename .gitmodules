@@ -200,3 +200,7 @@
 	path = derivatives/connectivity-v1
 	url = ./derivatives/connectivity-v1
 	datalad-id = 0359072a-700c-49c4-a13d-2523f8be7d9e
+[submodule "derivatives/connectivity-v2"]
+	path = derivatives/connectivity-v2
+	url = ./derivatives/connectivity-v2
+	datalad-id = 3a2f1692-0298-4874-8334-5cdd2165ae47
