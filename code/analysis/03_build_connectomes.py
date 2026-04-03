@@ -79,9 +79,9 @@ def load_all_timeseries(
     return timeseries_list, subject_ids
 
 
-def build_connectomes(project_root: Path):
+def build_connectomes(project_root: Path, variant: str = "v1"):
     """Build tangent connectomes for all subjects."""
-    conn_dir = derivatives_connectivity(project_root)
+    conn_dir = derivatives_connectivity(project_root, variant=variant)
     qc_path = conn_dir / "qc_prescreen.tsv"
     qc_df = pd.read_csv(qc_path, sep="\t")
 
@@ -167,8 +167,9 @@ def build_connectomes(project_root: Path):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--project-root", type=Path, default=Path("."))
+    parser.add_argument("--variant", default="v1", help="Connectivity variant.")
     args = parser.parse_args()
-    build_connectomes(args.project_root.resolve())
+    build_connectomes(args.project_root.resolve(), variant=args.variant)
 
 
 if __name__ == "__main__":

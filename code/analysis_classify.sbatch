@@ -33,21 +33,21 @@ echo "Host: $(hostname)"
 echo "Date: $(date -Iseconds)"
 
 python3 "$PROJECT_ROOT/code/analysis/03_build_connectomes.py" \
-    --project-root "$PROJECT_ROOT"
+    --project-root "$PROJECT_ROOT" --variant "$VARIANT"
 
 echo ""
 echo "=== Classification ==="
 echo "Date: $(date -Iseconds)"
 
 python3 "$PROJECT_ROOT/code/analysis/04_classify.py" \
-    --project-root "$PROJECT_ROOT"
+    --project-root "$PROJECT_ROOT" --variant "$VARIANT"
 
 echo ""
 echo "=== Visualization ==="
 echo "Date: $(date -Iseconds)"
 
 python3 "$PROJECT_ROOT/code/analysis/05_visualize.py" \
-    --project-root "$PROJECT_ROOT"
+    --project-root "$PROJECT_ROOT" --variant "$VARIANT"
 
 echo "=== All done ==="
 echo "Date: $(date -Iseconds)"

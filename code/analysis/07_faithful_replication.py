@@ -302,7 +302,7 @@ def main():
     print("\nFetching Abraham's CV splits...", flush=True)
     cv_splits = fetch_abraham_cv_splits(Path(data_dir) if data_dir else None)
 
-    cls_dir = derivatives_connectivity(root) / "classification"
+    cls_dir = derivatives_connectivity(root, variant="cpac") / "classification"
     cls_dir.mkdir(parents=True, exist_ok=True)
 
     # Ablation study: apply fixes incrementally

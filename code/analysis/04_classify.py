@@ -177,10 +177,10 @@ def _make_classifier(name: str):
 # --------------------------------------------------------------------------- #
 
 
-def classify(project_root: Path):
+def classify(project_root: Path, variant: str = "v1"):
     """Run all classification experiments."""
     np.random.seed(RANDOM_STATE)
-    conn_dir = derivatives_connectivity(project_root)
+    conn_dir = derivatives_connectivity(project_root, variant=variant)
     qc_path = conn_dir / "qc_prescreen.tsv"
 
     qc_df = pd.read_csv(qc_path, sep="\t")
@@ -287,8 +287,9 @@ def classify(project_root: Path):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--project-root", type=Path, default=Path("."))
+    parser.add_argument("--variant", default="v1", help="Connectivity variant.")
     args = parser.parse_args()
-    classify(args.project_root.resolve())
+    classify(args.project_root.resolve(), variant=args.variant)
 
 
 if __name__ == "__main__":

@@ -226,7 +226,7 @@ def main():
     print(f"  ASD: {(labels == 1).sum()}, TC: {(labels == 0).sum()}", flush=True)
     print(f"  Sites: {len(np.unique(sites))}", flush=True)
 
-    cls_dir = derivatives_connectivity(root) / "classification"
+    cls_dir = derivatives_connectivity(root, variant="cpac") / "classification"
     cls_dir.mkdir(parents=True, exist_ok=True)
 
     for clf_name in ("ridge", "svc"):

@@ -198,7 +198,7 @@ def write_comparison_table(results: dict, fig_dir: Path):
 
 def write_consort_flowchart(project_root: Path, fig_dir: Path):
     """Write a text-based CONSORT subject inclusion/exclusion flowchart."""
-    conn_dir = derivatives_connectivity(project_root)
+    conn_dir = derivatives_connectivity(project_root, variant="v1")
     qc_path = conn_dir / "qc_prescreen.tsv"
 
     if not qc_path.exists():
@@ -254,10 +254,11 @@ Included in analysis:                {n_pass:>5}
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--project-root", type=Path, default=Path("."))
+    parser.add_argument("--variant", default="v1", help="Connectivity variant.")
     args = parser.parse_args()
     root = args.project_root.resolve()
 
-    conn_dir = derivatives_connectivity(root)
+    conn_dir = derivatives_connectivity(root, variant=args.variant)
     cls_dir = conn_dir / "classification"
     fig_dir = conn_dir / "figures"
     fig_dir.mkdir(parents=True, exist_ok=True)

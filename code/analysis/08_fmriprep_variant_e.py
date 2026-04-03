@@ -52,9 +52,9 @@ from _helpers import (
 )
 
 
-def load_fmriprep_timeseries(project_root: Path):
+def load_fmriprep_timeseries(project_root: Path, variant: str = "v1"):
     """Load extracted time series + phenotypic data for all QC-passing subjects."""
-    conn_dir = derivatives_connectivity(project_root)
+    conn_dir = derivatives_connectivity(project_root, variant=variant)
     qc_path = conn_dir / "qc_prescreen.tsv"
     qc_df = pd.read_csv(qc_path, sep="\t")
     qc_pass = qc_df[qc_df["excluded_reason"] == "pass"].copy()
@@ -238,13 +238,14 @@ def run_variant_e(data, experiment_label, classifier_name="ridge",
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--project-root", type=Path, default=Path("."))
+    parser.add_argument("--variant", default="v1", help="Connectivity variant.")
     parser.add_argument("--data-dir", type=str, default=None,
                         help="Cache directory for CV splits download")
     args = parser.parse_args()
     root = args.project_root.resolve()
 
     print("Loading fMRIPrep-extracted time series...", flush=True)
-    data = load_fmriprep_timeseries(root)
+    data = load_fmriprep_timeseries(root, variant=args.variant)
     print(f"  ASD: {(data['labels'] == 1).sum()}, TC: {(data['labels'] == 0).sum()}", flush=True)
     print(f"  Sites: {len(np.unique(data['sites']))}", flush=True)
 
@@ -254,7 +255,8 @@ def main():
         Path(args.data_dir) if args.data_dir else None
     )
 
-    cls_dir = derivatives_connectivity(root) / "classification"
+    variant = args.variant
+    cls_dir = derivatives_connectivity(root, variant=variant) / "classification"
     cls_dir.mkdir(parents=True, exist_ok=True)
 
     # --- Experiment 1: ABIDE I with Abraham's 10-fold CV ---

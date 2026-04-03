@@ -173,6 +173,11 @@ def main():
         default=Path("."),
         help="Path to the YODA superdataset root.",
     )
+    parser.add_argument(
+        "--variant",
+        default="v1",
+        help="Connectivity variant suffix (default: v1).",
+    )
     args = parser.parse_args()
     root = args.project_root.resolve()
 
@@ -180,7 +185,7 @@ def main():
     df = prescreen(root)
 
     # Write output
-    out_dir = derivatives_connectivity(root)
+    out_dir = derivatives_connectivity(root, variant=args.variant)
     out_dir.mkdir(parents=True, exist_ok=True)
     out_path = out_dir / "qc_prescreen.tsv"
     df.to_csv(out_path, sep="\t", index=False)

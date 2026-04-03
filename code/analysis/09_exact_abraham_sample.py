@@ -159,7 +159,7 @@ def main():
         sid_to_row[int(row["source_subject_id"])] = row
 
     fmriprep_dir = derivatives_fmriprep(root)
-    conn_dir = derivatives_connectivity(root)
+    conn_dir = derivatives_connectivity(root, variant="fmriprep-baseline")
 
     # For each Abraham CV subject, load or extract time series
     print("\nLoading/extracting time series for Abraham's exact sample...", flush=True)
