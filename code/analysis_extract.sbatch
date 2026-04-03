@@ -50,10 +50,14 @@ fi
 echo "=== Extract: $SUBJECT (variants: $VARIANTS) ==="
 echo "Date: $(date -Iseconds)"
 
-# Stage BOLD + mask from GIN
+# Stage BOLD + mask from GIN (resolve globs before passing to datalad)
 cd "$PROJECT_ROOT/derivatives/fmriprep-25.2"
-datalad get "${SUBJECT}/ses-1/func/${SUBJECT}_ses-1_task-rest_*_space-MNI152NLin2009cAsym_desc-preproc_bold.nii.gz" 2>/dev/null || true
-datalad get "${SUBJECT}/ses-1/func/${SUBJECT}_ses-1_task-rest_*_space-MNI152NLin2009cAsym_desc-brain_mask.nii.gz" 2>/dev/null || true
+for f in ${SUBJECT}/ses-1/func/${SUBJECT}_ses-1_task-rest_*_space-MNI152NLin2009cAsym_desc-preproc_bold.nii.gz; do
+    [ -L "$f" ] && datalad get "$f" 2>/dev/null || true
+done
+for f in ${SUBJECT}/ses-1/func/${SUBJECT}_ses-1_task-rest_*_space-MNI152NLin2009cAsym_desc-brain_mask.nii.gz; do
+    [ -L "$f" ] && datalad get "$f" 2>/dev/null || true
+done
 cd "$PROJECT_ROOT"
 
 # Extract all variants
@@ -64,6 +68,8 @@ python3 code/analysis/extract_subject.py \
 
 # Drop BOLD to reclaim scratch
 cd "$PROJECT_ROOT/derivatives/fmriprep-25.2"
-datalad drop "${SUBJECT}/ses-1/func/${SUBJECT}_ses-1_task-rest_*_space-MNI152NLin2009cAsym_desc-preproc_bold.nii.gz" 2>/dev/null || true
+for f in ${SUBJECT}/ses-1/func/${SUBJECT}_ses-1_task-rest_*_space-MNI152NLin2009cAsym_desc-preproc_bold.nii.gz; do
+    [ -L "$f" ] && datalad drop "$f" 2>/dev/null || true
+done
 
 echo "=== Done ==="
