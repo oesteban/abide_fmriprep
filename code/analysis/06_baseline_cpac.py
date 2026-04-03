@@ -1,14 +1,13 @@
 #!/usr/bin/env python3
-"""Baseline: run the same classification on C-PAC preprocessed ABIDE I.
+"""C-PAC baseline classification (reads pre-extracted parquets).
 
-Downloads the Preprocessed Connectomes Project (PCP) C-PAC data via
-nilearn's fetch_abide_pcp(), extracts MSDL time series, writes per-subject
-BEP017 outputs to connectivity-cpac/, and runs tangent + RidgeClassifier /
-SVC classification.
+Reads MSDL time series from connectivity-cpac/ (written by
+extract_subject.py --source cpac) and runs tangent + Ridge/SVC
+classification with LOGO and intra-site CV.
 
 Usage::
 
-    python code/analysis/06_baseline_cpac.py --project-root . [--data-dir /path/to/cache]
+    python code/analysis/06_baseline_cpac.py --project-root .
 """
 
 from __future__ import annotations
@@ -21,8 +20,7 @@ from pathlib import Path
 
 import numpy as np
 import pandas as pd
-from nilearn.datasets import fetch_abide_pcp, fetch_atlas_msdl
-from nilearn.maskers import NiftiMapsMasker
+from nilearn.datasets import fetch_abide_pcp
 from sklearn.linear_model import RidgeClassifier
 from sklearn.model_selection import LeaveOneGroupOut, StratifiedShuffleSplit
 from sklearn.pipeline import Pipeline
@@ -42,182 +40,106 @@ from _helpers import (
     RANDOM_STATE,
     TangentEmbeddingTransformer,
     derivatives_connectivity,
-    software_versions,
 )
 
 
-def extract_cpac_timeseries(data_dir: str | None = None, conn_dir: Path | None = None):
-    """Fetch C-PAC ABIDE I data, extract MSDL time series, write BEP017 outputs."""
-    print("Fetching ABIDE PCP (C-PAC, func_preproc)...", flush=True)
-    abide = fetch_abide_pcp(
-        data_dir=data_dir,
-        pipeline="cpac",
-        band_pass_filtering=True,
-        global_signal_regression=False,
-        derivatives=["func_preproc"],
-        quality_checked=True,
-        verbose=1,
-    )
-    func_files = abide.func_preproc
+def load_cpac_timeseries(project_root: Path, data_dir: str | None = None):
+    """Load pre-extracted C-PAC parquets + phenotypic data."""
+    conn_dir = derivatives_connectivity(project_root, variant="cpac")
+
+    # Get phenotypic info from PCP
+    print("Fetching PCP phenotypic data...", flush=True)
+    abide = fetch_abide_pcp(data_dir=data_dir, pipeline="cpac", band_pass_filtering=True,
+                            global_signal_regression=False, derivatives=["func_preproc"],
+                            quality_checked=True, verbose=0)
     phenotypic = abide.phenotypic
-    print(f"  Total subjects: {len(func_files)}", flush=True)
 
-    atlas = fetch_atlas_msdl()
-    region_labels = list(atlas.labels)
-
-    masker = NiftiMapsMasker(
-        maps_img=atlas.maps,
-        standardize="zscore_sample",
-        detrend=True,
-        low_pass=None,
-        high_pass=None,
-    )
-
-    timeseries_list = []
+    timeseries = []
     labels = []
     sites = []
     subject_ids = []
-    skipped = 0
 
-    print(f"  Extracting time series from {len(func_files)} subjects...", flush=True)
-    for i, func in enumerate(func_files):
+    for i in range(len(phenotypic)):
         dx = int(phenotypic["DX_GROUP"].iloc[i])
         site = str(phenotypic["SITE_ID"].iloc[i])
         sub_id = str(int(phenotypic["SUB_ID"].iloc[i])).zfill(7)
+        sub_label = f"sub-{sub_id}"
 
         if dx not in (1, 2):
-            skipped += 1
             continue
 
-        try:
-            ts = masker.fit_transform(func)
-            if ts.shape[1] != N_MSDL_REGIONS:
-                skipped += 1
-                continue
-            timeseries_list.append(ts)
-            labels.append(1 if dx == 1 else 0)
-            sites.append(site)
-            subject_ids.append(sub_id)
+        func_dir = conn_dir / sub_label / "ses-1" / "func"
+        parquets = list(func_dir.glob("*_timeseries.parquet")) if func_dir.is_dir() else []
+        if not parquets:
+            continue
 
-            # Write BEP017 per-subject outputs
-            if conn_dir is not None:
-                sub_label = f"sub-{sub_id}"
-                func_dir = conn_dir / sub_label / "ses-1" / "func"
-                func_dir.mkdir(parents=True, exist_ok=True)
-                stem = f"{sub_label}_ses-1_task-rest_run-1_space-MNI152_atlas-MSDL"
+        ts = pd.read_parquet(parquets[0]).values
+        if ts.shape[1] != N_MSDL_REGIONS:
+            continue
 
-                ts_df = pd.DataFrame(ts, columns=region_labels)
-                ts_df.to_parquet(func_dir / f"{stem}_stat-mean_timeseries.parquet", index=False)
+        timeseries.append(ts)
+        labels.append(1 if dx == 1 else 0)
+        sites.append(site)
+        subject_ids.append(sub_id)
 
-                sidecar = {
-                    "Atlas": "MSDL",
-                    "NumberOfRegions": N_MSDL_REGIONS,
-                    "NumberOfVolumes": int(ts.shape[0]),
-                    "Pipeline": "cpac",
-                    "BandPassFiltering": True,
-                    "GlobalSignalRegression": False,
-                    "Standardize": "zscore_sample",
-                    "Detrend": True,
-                    "SoftwareVersions": software_versions(),
-                    "Timestamp": datetime.now(timezone.utc).isoformat(),
-                }
-                with open(func_dir / f"{stem}_stat-mean_timeseries.json", "w") as f:
-                    json.dump(sidecar, f, indent=2)
-
-        except Exception as e:
-            print(f"  WARNING: subject {sub_id} failed: {e}", flush=True)
-            skipped += 1
-
-        if (i + 1) % 50 == 0:
-            print(f"  Processed {i + 1}/{len(func_files)} "
-                  f"(extracted: {len(timeseries_list)}, skipped: {skipped})", flush=True)
-
-    print(f"  Extracted: {len(timeseries_list)}, skipped: {skipped}", flush=True)
-    return timeseries_list, np.array(labels), np.array(sites), subject_ids
+    print(f"  Loaded {len(timeseries)} subjects from parquets", flush=True)
+    return timeseries, np.array(labels), np.array(sites), subject_ids
 
 
 def run_intersite_cv(timeseries, labels, sites, classifier_name="ridge"):
     clf = RidgeClassifier() if classifier_name == "ridge" else SVC(kernel="linear")
     logo = LeaveOneGroupOut()
     site_results = {}
-
     for train_idx, test_idx in logo.split(timeseries, labels, groups=sites):
         test_site = sites[test_idx[0]]
-        X_train = [timeseries[i] for i in train_idx]
-        X_test = [timeseries[i] for i in test_idx]
-        y_train, y_test = labels[train_idx], labels[test_idx]
-
-        pipe = Pipeline([
-            ("tangent", TangentEmbeddingTransformer()),
-            ("classifier", clf),
-        ])
-        pipe.fit(X_train, y_train)
-        accuracy = pipe.score(X_test, y_test)
+        pipe = Pipeline([("tangent", TangentEmbeddingTransformer()), ("classifier", clf)])
+        pipe.fit([timeseries[i] for i in train_idx], labels[train_idx])
+        accuracy = pipe.score([timeseries[i] for i in test_idx], labels[test_idx])
         site_results[test_site] = {
             "accuracy": round(float(accuracy), 6),
             "n_test": int(len(test_idx)),
-            "n_asd": int((y_test == 1).sum()),
-            "n_tc": int((y_test == 0).sum()),
+            "n_asd": int((labels[test_idx] == 1).sum()),
+            "n_tc": int((labels[test_idx] == 0).sum()),
         }
-
     accuracies = [v["accuracy"] for v in site_results.values()]
     return {
         "cv_scheme": "intersite_leave_one_site_out",
         "classifier": classifier_name,
-        "n_sites": len(set(sites)),
-        "n_subjects": len(labels),
+        "n_sites": len(set(sites)), "n_subjects": len(labels),
         "mean_accuracy": round(float(np.mean(accuracies)), 6),
         "std_accuracy": round(float(np.std(accuracies)), 6),
         "per_site": site_results,
     }
 
 
-def run_intrasite_cv(timeseries, labels, sites, classifier_name="ridge",
-                     n_splits=100, test_size=0.2, random_state=RANDOM_STATE,
-                     min_subjects=10, min_per_class=5):
+def run_intrasite_cv(timeseries, labels, sites, classifier_name="ridge"):
     unique_sites = np.unique(sites)
     site_results = {}
-
     for site in unique_sites:
-        site_mask = sites == site
-        y_site = labels[site_mask]
-        if len(y_site) < min_subjects:
+        mask = sites == site
+        y = labels[mask]
+        if len(y) < 10 or (y == 1).sum() < 5 or (y == 0).sum() < 5:
             continue
-        if (y_site == 1).sum() < min_per_class or (y_site == 0).sum() < min_per_class:
-            continue
-
-        ts_site = [timeseries[i] for i, m in enumerate(site_mask) if m]
-        sss = StratifiedShuffleSplit(n_splits=n_splits, test_size=test_size, random_state=random_state)
-        fold_accs = []
-
-        for train_idx, test_idx in sss.split(ts_site, y_site):
-            X_train = [ts_site[i] for i in train_idx]
-            X_test = [ts_site[i] for i in test_idx]
-            y_train, y_test = y_site[train_idx], y_site[test_idx]
+        ts_site = [timeseries[i] for i, m in enumerate(mask) if m]
+        sss = StratifiedShuffleSplit(n_splits=100, test_size=0.2, random_state=RANDOM_STATE)
+        accs = []
+        for tr_i, te_i in sss.split(ts_site, y):
             clf = RidgeClassifier() if classifier_name == "ridge" else SVC(kernel="linear")
-            pipe = Pipeline([
-                ("tangent", TangentEmbeddingTransformer()),
-                ("classifier", clf),
-            ])
-            pipe.fit(X_train, y_train)
-            fold_accs.append(pipe.score(X_test, y_test))
-
+            pipe = Pipeline([("tangent", TangentEmbeddingTransformer()), ("classifier", clf)])
+            pipe.fit([ts_site[i] for i in tr_i], y[tr_i])
+            accs.append(pipe.score([ts_site[i] for i in te_i], y[te_i]))
         site_results[site] = {
-            "median_accuracy": round(float(np.median(fold_accs)), 6),
-            "mean_accuracy": round(float(np.mean(fold_accs)), 6),
-            "std_accuracy": round(float(np.std(fold_accs)), 6),
-            "n_subjects": int(site_mask.sum()),
-            "n_asd": int((y_site == 1).sum()),
-            "n_tc": int((y_site == 0).sum()),
+            "median_accuracy": round(float(np.median(accs)), 6),
+            "mean_accuracy": round(float(np.mean(accs)), 6),
+            "std_accuracy": round(float(np.std(accs)), 6),
+            "n_subjects": int(mask.sum()),
         }
-
-    median_accs = [v["median_accuracy"] for v in site_results.values()]
+    medians = [v["median_accuracy"] for v in site_results.values()]
     return {
         "cv_scheme": "intrasite_stratified_shuffle_split",
         "classifier": classifier_name,
-        "n_splits": n_splits,
         "n_sites_evaluated": len(site_results),
-        "mean_of_medians": round(float(np.mean(median_accs)), 6) if median_accs else None,
+        "mean_of_medians": round(float(np.mean(medians)), 6) if medians else None,
         "per_site": site_results,
     }
 
@@ -225,45 +147,35 @@ def run_intrasite_cv(timeseries, labels, sites, classifier_name="ridge",
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--project-root", type=Path, default=Path("."))
-    parser.add_argument("--data-dir", type=str, default=None,
-                        help="Cache directory for PCP downloads (default: ~/nilearn_data)")
+    parser.add_argument("--data-dir", type=str, default=None)
     args = parser.parse_args()
     root = args.project_root.resolve()
     np.random.seed(RANDOM_STATE)
 
-    conn_dir = derivatives_connectivity(root, variant="cpac")
+    timeseries, labels, sites, _ = load_cpac_timeseries(root, args.data_dir)
+    print(f"\n=== C-PAC Baseline (N={len(timeseries)}) ===", flush=True)
+    print(f"  ASD: {(labels == 1).sum()}, TC: {(labels == 0).sum()}, Sites: {len(np.unique(sites))}", flush=True)
 
-    timeseries, labels, sites, subject_ids = extract_cpac_timeseries(
-        args.data_dir, conn_dir=conn_dir
-    )
-
-    print(f"\n=== Baseline: C-PAC preprocessed ABIDE I (N={len(timeseries)}) ===", flush=True)
-    print(f"  ASD: {(labels == 1).sum()}, TC: {(labels == 0).sum()}", flush=True)
-    print(f"  Sites: {len(np.unique(sites))}", flush=True)
-
-    cls_dir = conn_dir / "classification"
+    cls_dir = derivatives_connectivity(root, variant="cpac") / "classification"
     cls_dir.mkdir(parents=True, exist_ok=True)
 
     for clf_name in ("ridge", "svc"):
-        print(f"\n  Inter-site CV ({clf_name})...", flush=True)
-        result = run_intersite_cv(timeseries, labels, sites, clf_name)
-        result["experiment"] = "cpac_baseline"
-        result["timestamp"] = datetime.now(timezone.utc).isoformat()
+        print(f"\n  Inter-site ({clf_name})...", flush=True)
+        r = run_intersite_cv(timeseries, labels, sites, clf_name)
+        r["experiment"] = "cpac_baseline"
+        r["timestamp"] = datetime.now(timezone.utc).isoformat()
         with open(cls_dir / f"results_intersite_cpac_{clf_name}.json", "w") as f:
-            json.dump(result, f, indent=2)
-        print(f"    Mean accuracy: {result['mean_accuracy']:.4f} "
-              f"(+/- {result['std_accuracy']:.4f})", flush=True)
+            json.dump(r, f, indent=2)
+        print(f"    {r['mean_accuracy']:.1%} (+/- {r['std_accuracy']:.1%})", flush=True)
 
-        print(f"  Intra-site CV ({clf_name})...", flush=True)
-        result = run_intrasite_cv(timeseries, labels, sites, clf_name)
-        result["experiment"] = "cpac_baseline"
-        result["timestamp"] = datetime.now(timezone.utc).isoformat()
+        print(f"  Intra-site ({clf_name})...", flush=True)
+        r = run_intrasite_cv(timeseries, labels, sites, clf_name)
+        r["experiment"] = "cpac_baseline"
+        r["timestamp"] = datetime.now(timezone.utc).isoformat()
         with open(cls_dir / f"results_intrasite_cpac_{clf_name}.json", "w") as f:
-            json.dump(result, f, indent=2)
-        if result["mean_of_medians"] is not None:
-            print(f"    Mean of medians: {result['mean_of_medians']:.4f}", flush=True)
-
-    print(f"\nResults saved to {cls_dir}/", flush=True)
+            json.dump(r, f, indent=2)
+        if r["mean_of_medians"]:
+            print(f"    Mean of medians: {r['mean_of_medians']:.1%}", flush=True)
 
 
 if __name__ == "__main__":

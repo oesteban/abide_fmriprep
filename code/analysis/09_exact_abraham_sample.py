@@ -1,14 +1,15 @@
 #!/usr/bin/env python3
-"""fMRIPrep baseline: same subjects, folds, and classification as C-PAC ablation E.
+"""fMRIPrep baseline classification: Abraham's exact sample.
 
-Takes Abraham's exact 714-subject CV split, uses fMRIPrep-preprocessed BOLD
-instead of C-PAC, extracts MSDL time series, and runs variant E classification.
-Direct comparison with 07_faithful_replication.py variant E.
+Reads pre-extracted v1 parquets for Abraham's 714-subject CV split,
+runs variant E classification. Direct comparison with C-PAC ablation E.
+
+Extraction is handled by extract_subject.py; this script is
+classification-only.
 
 Usage::
 
-    python code/analysis/09_exact_abraham_sample.py --project-root . \
-        --data-dir /path/to/nilearn_cache [--dry-run]
+    python code/analysis/09_exact_abraham_sample.py --project-root . [--data-dir /path]
 """
 
 from __future__ import annotations
@@ -19,11 +20,8 @@ import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
-import nibabel as nib
 import numpy as np
 import pandas as pd
-from nilearn.datasets import fetch_atlas_msdl
-from nilearn.maskers import NiftiMapsMasker
 from sklearn.linear_model import RidgeClassifier
 from sklearn.model_selection import GridSearchCV, PredefinedSplit
 from sklearn.svm import SVC
@@ -40,13 +38,12 @@ _setup_path()
 from _helpers import (
     N_MSDL_REGIONS,
     RANDOM_STATE,
+    SPACE,
     TangentEmbeddingTransformer,
     derivatives_connectivity,
     derivatives_fmriprep,
     fetch_abraham_cv_splits,
     find_confounds,
-    bold_path_from_confounds,
-    get_tr,
     regress_confounds,
     software_versions,
 )
@@ -56,92 +53,24 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--project-root", type=Path, default=Path("."))
     parser.add_argument("--data-dir", type=str, default=None)
-    parser.add_argument("--dry-run", action="store_true",
-                        help="Check subject matching without extracting or classifying.")
+    parser.add_argument("--source-variant", default="v1",
+                        help="Which fMRIPrep variant's parquets to read (default: v1).")
     args = parser.parse_args()
     root = args.project_root.resolve()
     np.random.seed(RANDOM_STATE)
 
-    # 1. Get Abraham's 714-subject CV fold assignments
+    # Abraham's CV splits
     print("Fetching Abraham's CV splits...", flush=True)
-    cv_splits = fetch_abraham_cv_splits(
-        Path(args.data_dir) if args.data_dir else None
-    )
-    print(f"  {len(cv_splits)} subjects in CV splits", flush=True)
+    cv_splits = fetch_abraham_cv_splits(Path(args.data_dir) if args.data_dir else None)
+    print(f"  {len(cv_splits)} subjects", flush=True)
 
-    # 2. Map PCP source_subject_id → our participant_id
+    # Map source_subject_id → participant_id
     pheno = pd.read_csv(root / "inputs" / "abide-both" / "participants.tsv", sep="\t")
     a1 = pheno[pheno["source_dataset"] == "abide1"]
     sid_to_row = {int(r["source_subject_id"]): r for _, r in a1.iterrows()}
 
-    # 3. Check fMRIPrep availability for each CV subject
-    fmriprep_dir = derivatives_fmriprep(root)
-    atlas = fetch_atlas_msdl()
-
-    subjects = []  # list of dicts with all info needed
-    no_mapping = []
-    no_fmriprep = []
-
-    for source_sid, fold_idx in sorted(cv_splits.items()):
-        row = sid_to_row.get(source_sid)
-        if row is None:
-            no_mapping.append(source_sid)
-            continue
-
-        pid = row["participant_id"]
-        runs = find_confounds(pid, fmriprep_dir)
-        if not runs:
-            no_fmriprep.append((source_sid, pid))
-            continue
-
-        run_label, conf_path = runs[0]  # first available run
-        bold = bold_path_from_confounds(conf_path)
-
-        subjects.append({
-            "source_sid": source_sid,
-            "participant_id": pid,
-            "fold": fold_idx,
-            "run_label": run_label,
-            "conf_path": conf_path,
-            "bold_path": bold,
-            "group": row["group"],
-            "site": str(row["source_site"]),
-            "age": float(row["age"]) if pd.notna(row.get("age")) else 25.0,
-            "sex": 1 if row.get("sex") == "M" else 2,
-        })
-
-    print(f"\n  Matched to fMRIPrep: {len(subjects)}", flush=True)
-    print(f"  No mapping in participants.tsv: {len(no_mapping)}", flush=True)
-    print(f"  No fMRIPrep derivatives: {len(no_fmriprep)}", flush=True)
-    if no_fmriprep:
-        for sid, pid in no_fmriprep:
-            print(f"    {pid} (source_sid={sid})", flush=True)
-
-    folds = sorted(set(s["fold"] for s in subjects))
-    sites = sorted(set(s["site"] for s in subjects))
-    print(f"  Folds: {len(folds)}, Sites: {len(sites)}", flush=True)
-
-    if args.dry_run:
-        # Check BOLD availability (file exists on disk vs annex pointer)
-        bold_available = sum(1 for s in subjects if s["bold_path"].exists() and s["bold_path"].stat().st_size > 1000)
-        bold_pointer = len(subjects) - bold_available
-        print(f"\n  BOLD files available (content on disk): {bold_available}", flush=True)
-        print(f"  BOLD files needing datalad get: {bold_pointer}", flush=True)
-        print(f"\n  DRY RUN complete. {len(subjects)} subjects ready for extraction.", flush=True)
-        return
-
-    # 4. Extract MSDL time series for all matched subjects
-    print(f"\nExtracting time series for {len(subjects)} subjects...", flush=True)
-    masker = NiftiMapsMasker(
-        maps_img=atlas.maps,
-        standardize="zscore_sample",
-        detrend=True,
-        low_pass=None,
-        high_pass=None,
-    )
-
-    conn_dir = derivatives_connectivity(root, variant="fmriprep-baseline")
-    region_labels = list(atlas.labels)
+    # Read parquets from the source variant dataset
+    source_dir = derivatives_connectivity(root, variant=args.source_variant)
 
     timeseries = []
     labels = []
@@ -149,50 +78,40 @@ def main():
     age_values = []
     sex_values = []
     fold_values = []
-    extracted = 0
-    failed = 0
+    matched = 0
+    missing = 0
 
-    for i, s in enumerate(subjects):
-        try:
-            ts = masker.fit_transform(str(s["bold_path"]))
-            if ts.shape[1] != N_MSDL_REGIONS:
-                failed += 1
-                continue
-            timeseries.append(ts)
-            labels.append(1 if s["group"] == "ASD" else 0)
-            site_labels.append(s["site"])
-            age_values.append(s["age"])
-            sex_values.append(s["sex"])
-            fold_values.append(s["fold"])
-            extracted += 1
+    for source_sid, fold_idx in sorted(cv_splits.items()):
+        row = sid_to_row.get(source_sid)
+        if row is None:
+            missing += 1
+            continue
 
-            # Write BEP017 per-subject outputs
-            pid = s["participant_id"]
-            func_dir = conn_dir / pid / "ses-1" / "func"
-            func_dir.mkdir(parents=True, exist_ok=True)
-            stem = f"{pid}_ses-1_task-rest_{s['run_label']}_space-{SPACE}_atlas-MSDL"
-            ts_df = pd.DataFrame(ts, columns=region_labels)
-            ts_df.to_parquet(func_dir / f"{stem}_stat-mean_timeseries.parquet", index=False)
+        pid = row["participant_id"]
+        group = row["group"]
+        if group not in ("ASD", "TC"):
+            missing += 1
+            continue
 
-            sidecar = {
-                "Atlas": "MSDL",
-                "NumberOfRegions": N_MSDL_REGIONS,
-                "NumberOfVolumes": int(ts.shape[0]),
-                "Pipeline": "fmriprep",
-                "Standardize": "zscore_sample",
-                "Detrend": True,
-                "SoftwareVersions": software_versions(),
-                "Timestamp": datetime.now(timezone.utc).isoformat(),
-            }
-            with open(func_dir / f"{stem}_stat-mean_timeseries.json", "w") as f:
-                json.dump(sidecar, f, indent=2)
+        # Load parquet from source variant
+        func_dir = source_dir / pid / "ses-1" / "func"
+        parquets = list(func_dir.glob("*_timeseries.parquet")) if func_dir.is_dir() else []
+        if not parquets:
+            missing += 1
+            continue
 
-        except Exception as e:
-            print(f"  FAILED: {s['participant_id']}: {e}", flush=True)
-            failed += 1
+        ts = pd.read_parquet(parquets[0]).values
+        if ts.shape[1] != N_MSDL_REGIONS:
+            missing += 1
+            continue
 
-        if (i + 1) % 50 == 0:
-            print(f"  {i + 1}/{len(subjects)} (extracted: {extracted}, failed: {failed})", flush=True)
+        timeseries.append(ts)
+        labels.append(1 if group == "ASD" else 0)
+        site_labels.append(str(row["source_site"]))
+        age_values.append(float(row["age"]) if pd.notna(row.get("age")) else 25.0)
+        sex_values.append(1 if row.get("sex") == "M" else 2)
+        fold_values.append(fold_idx)
+        matched += 1
 
     labels = np.array(labels)
     site_labels = np.array(site_labels)
@@ -201,13 +120,12 @@ def main():
     fold_ids = np.array(fold_values)
 
     print(f"\n=== fMRIPrep baseline (Abraham's exact sample) ===", flush=True)
-    print(f"  Extracted: {extracted}, Failed: {failed}", flush=True)
+    print(f"  Matched: {matched} / {len(cv_splits)} (missing: {missing})", flush=True)
     print(f"  ASD: {(labels == 1).sum()}, TC: {(labels == 0).sum()}", flush=True)
     print(f"  Sites: {len(np.unique(site_labels))}, Folds: {len(np.unique(fold_ids))}", flush=True)
 
-    # 5. Variant E classification (same as 07_faithful_replication.py variant E)
-    conn_dir = derivatives_connectivity(root, variant="fmriprep-baseline")
-    cls_dir = conn_dir / "classification"
+    # Variant E classification
+    cls_dir = derivatives_connectivity(root, variant="fmriprep-baseline") / "classification"
     cls_dir.mkdir(parents=True, exist_ok=True)
 
     unique_sites = np.unique(site_labels)
@@ -250,20 +168,19 @@ def main():
         result = {
             "experiment": "fmriprep_baseline",
             "variant": "E_full_replication",
+            "source_variant": args.source_variant,
             "cv_scheme": "abraham_10fold",
             "classifier": clf_name,
             "n_folds": len(np.unique(fold_ids)),
-            "n_subjects": extracted,
-            "n_subjects_abraham": len(cv_splits),
-            "n_failed": failed,
+            "n_subjects": matched,
+            "n_missing": missing,
             "mean_accuracy": round(float(np.mean(accuracies)), 6),
             "std_accuracy": round(float(np.std(accuracies)), 6),
             "per_fold": fold_results,
             "timestamp": datetime.now(timezone.utc).isoformat(),
             "software_versions": software_versions(),
         }
-        out_path = cls_dir / f"results_exact_abraham_fmriprep_{clf_name}.json"
-        with open(out_path, "w") as f:
+        with open(cls_dir / f"results_exact_abraham_fmriprep_{clf_name}.json", "w") as f:
             json.dump(result, f, indent=2)
         print(f"    Accuracy: {result['mean_accuracy']:.1%} (+/- {result['std_accuracy']:.1%})", flush=True)
 
