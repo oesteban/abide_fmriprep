@@ -175,8 +175,11 @@ def main():
     )
     parser.add_argument(
         "--variant",
-        default="v1",
-        help="Connectivity variant suffix (default: v1).",
+        nargs="+",
+        default=["v1"],
+        help="Connectivity variant(s) to write qc_prescreen.tsv into "
+        "(default: v1). QC is preprocessing-dependent, not variant-dependent, "
+        "so the same result is written to all specified variants.",
     )
     args = parser.parse_args()
     root = args.project_root.resolve()
@@ -184,11 +187,13 @@ def main():
     print(f"Pre-screening subjects in {root}", flush=True)
     df = prescreen(root)
 
-    # Write output
-    out_dir = derivatives_connectivity(root, variant=args.variant)
-    out_dir.mkdir(parents=True, exist_ok=True)
-    out_path = out_dir / "qc_prescreen.tsv"
-    df.to_csv(out_path, sep="\t", index=False)
+    # Write output to each variant's dataset
+    for variant in args.variant:
+        out_dir = derivatives_connectivity(root, variant=variant)
+        out_dir.mkdir(parents=True, exist_ok=True)
+        out_path = out_dir / "qc_prescreen.tsv"
+        df.to_csv(out_path, sep="\t", index=False)
+        print(f"  Written to {out_path}", flush=True)
 
     # Summary
     n_pass = (df["excluded_reason"] == "pass").sum()
@@ -197,20 +202,17 @@ def main():
     n_low_vol = df["excluded_reason"].str.contains("low_volumes", na=False).sum()
     n_no_output = (df["excluded_reason"] == "no_fmriprep_output").sum()
 
-    # ABIDE I / II breakdown
     df_pass = df[df["excluded_reason"] == "pass"]
     n_abide1 = (df_pass["source_dataset"] == "abide1").sum()
     n_abide2 = (df_pass["source_dataset"] == "abide2").sum()
 
-    print(f"\nPre-screen results written to {out_path}", flush=True)
-    print(f"  Eligible subjects screened: {len(df)}", flush=True)
+    print(f"\nEligible subjects screened: {len(df)}", flush=True)
     print(f"  Passed: {n_pass} (ABIDE I: {n_abide1}, ABIDE II: {n_abide2})", flush=True)
     print(f"  Excluded: {n_excluded}", flush=True)
     print(f"    - No fMRIPrep output: {n_no_output}", flush=True)
     print(f"    - High mean FD (>{MAX_MEAN_FD} mm): {n_high_fd}", flush=True)
     print(f"    - Low usable volumes (<{MIN_USABLE_VOLUMES}): {n_low_vol}", flush=True)
 
-    # Multi-run stats
     multi_run = df[df["n_runs_available"] > 1]
     if len(multi_run) > 0:
         print(f"\n  Multi-run subjects: {len(multi_run)}", flush=True)
