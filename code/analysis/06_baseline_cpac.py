@@ -2,11 +2,9 @@
 """Baseline: run the same classification on C-PAC preprocessed ABIDE I.
 
 Downloads the Preprocessed Connectomes Project (PCP) C-PAC data via
-nilearn's fetch_abide_pcp(), extracts MSDL time series, and runs the
-same tangent + RidgeClassifier / SVC pipeline as 04_classify.py.
-
-This isolates whether the accuracy gap vs Abraham et al. (2017) is due
-to preprocessing (fMRIPrep vs C-PAC) or analysis code differences.
+nilearn's fetch_abide_pcp(), extracts MSDL time series, writes per-subject
+BEP017 outputs to connectivity-cpac/, and runs tangent + RidgeClassifier /
+SVC classification.
 
 Usage::
 
@@ -22,6 +20,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 import numpy as np
+import pandas as pd
 from nilearn.datasets import fetch_abide_pcp, fetch_atlas_msdl
 from nilearn.maskers import NiftiMapsMasker
 from sklearn.linear_model import RidgeClassifier
@@ -38,28 +37,18 @@ def _setup_path():
 
 _setup_path()
 
-from _helpers import N_MSDL_REGIONS, RANDOM_STATE, TangentEmbeddingTransformer, derivatives_connectivity
+from _helpers import (
+    N_MSDL_REGIONS,
+    RANDOM_STATE,
+    TangentEmbeddingTransformer,
+    derivatives_connectivity,
+    software_versions,
+)
 
 
-def extract_cpac_timeseries(data_dir: str | None = None):
-    """Fetch C-PAC ABIDE I data and extract MSDL time series.
-
-    Uses the same parameters as Abraham: band_pass_filtering=True
-    (C-PAC already applied 0.01-0.1 Hz), quality_checked=True.
-
-    If data is already cached, loads directly from disk to avoid
-    nilearn's slow re-verification of all 871 files.
-    """
-    import glob
-    import pandas as pd
-
-    cache_dir = Path(data_dir or Path.home() / "nilearn_data") / "ABIDE_pcp" / "cpac" / "filt_noglobal"
-    phenotypic_path = Path(data_dir or Path.home() / "nilearn_data") / "ABIDE_pcp" / "Phenotypic_V1_0b_preprocessed1.csv"
-
-    # Always use fetch_abide_pcp to ensure all subjects are downloaded.
-    # This verifies cached files and fetches any missing ones.
+def extract_cpac_timeseries(data_dir: str | None = None, conn_dir: Path | None = None):
+    """Fetch C-PAC ABIDE I data, extract MSDL time series, write BEP017 outputs."""
     print("Fetching ABIDE PCP (C-PAC, func_preproc)...", flush=True)
-    print("  (This may take a while on first run or if cache is incomplete)", flush=True)
     abide = fetch_abide_pcp(
         data_dir=data_dir,
         pipeline="cpac",
@@ -74,15 +63,13 @@ def extract_cpac_timeseries(data_dir: str | None = None):
     print(f"  Total subjects: {len(func_files)}", flush=True)
 
     atlas = fetch_atlas_msdl()
-    print(f"  MSDL atlas loaded ({len(atlas.labels)} regions)", flush=True)
+    region_labels = list(atlas.labels)
 
-    # Extract time series -- C-PAC data is already denoised, so no confounds needed
-    # Abraham used standardize=True, detrend=True, low_pass/high_pass already applied by C-PAC
     masker = NiftiMapsMasker(
         maps_img=atlas.maps,
         standardize="zscore_sample",
         detrend=True,
-        low_pass=None,   # already band-pass filtered by C-PAC
+        low_pass=None,
         high_pass=None,
     )
 
@@ -96,7 +83,7 @@ def extract_cpac_timeseries(data_dir: str | None = None):
     for i, func in enumerate(func_files):
         dx = int(phenotypic["DX_GROUP"].iloc[i])
         site = str(phenotypic["SITE_ID"].iloc[i])
-        sub_id = str(phenotypic["SUB_ID"].iloc[i])
+        sub_id = str(int(phenotypic["SUB_ID"].iloc[i])).zfill(7)
 
         if dx not in (1, 2):
             skipped += 1
@@ -108,9 +95,35 @@ def extract_cpac_timeseries(data_dir: str | None = None):
                 skipped += 1
                 continue
             timeseries_list.append(ts)
-            labels.append(1 if dx == 1 else 0)  # 1=ASD, 2=TC -> 1=ASD, 0=TC
+            labels.append(1 if dx == 1 else 0)
             sites.append(site)
             subject_ids.append(sub_id)
+
+            # Write BEP017 per-subject outputs
+            if conn_dir is not None:
+                sub_label = f"sub-{sub_id}"
+                func_dir = conn_dir / sub_label / "ses-1" / "func"
+                func_dir.mkdir(parents=True, exist_ok=True)
+                stem = f"{sub_label}_ses-1_task-rest_run-1_space-MNI152_atlas-MSDL"
+
+                ts_df = pd.DataFrame(ts, columns=region_labels)
+                ts_df.to_parquet(func_dir / f"{stem}_stat-mean_timeseries.parquet", index=False)
+
+                sidecar = {
+                    "Atlas": "MSDL",
+                    "NumberOfRegions": N_MSDL_REGIONS,
+                    "NumberOfVolumes": int(ts.shape[0]),
+                    "Pipeline": "cpac",
+                    "BandPassFiltering": True,
+                    "GlobalSignalRegression": False,
+                    "Standardize": "zscore_sample",
+                    "Detrend": True,
+                    "SoftwareVersions": software_versions(),
+                    "Timestamp": datetime.now(timezone.utc).isoformat(),
+                }
+                with open(func_dir / f"{stem}_stat-mean_timeseries.json", "w") as f:
+                    json.dump(sidecar, f, indent=2)
+
         except Exception as e:
             print(f"  WARNING: subject {sub_id} failed: {e}", flush=True)
             skipped += 1
@@ -160,7 +173,7 @@ def run_intersite_cv(timeseries, labels, sites, classifier_name="ridge"):
 
 
 def run_intrasite_cv(timeseries, labels, sites, classifier_name="ridge",
-                     n_splits=100, test_size=0.2, random_state=42,
+                     n_splits=100, test_size=0.2, random_state=RANDOM_STATE,
                      min_subjects=10, min_per_class=5):
     unique_sites = np.unique(sites)
     site_results = {}
@@ -216,17 +229,19 @@ def main():
                         help="Cache directory for PCP downloads (default: ~/nilearn_data)")
     args = parser.parse_args()
     root = args.project_root.resolve()
-
     np.random.seed(RANDOM_STATE)
 
-    # Extract time series from C-PAC data
-    timeseries, labels, sites, subject_ids = extract_cpac_timeseries(args.data_dir)
+    conn_dir = derivatives_connectivity(root, variant="cpac")
+
+    timeseries, labels, sites, subject_ids = extract_cpac_timeseries(
+        args.data_dir, conn_dir=conn_dir
+    )
 
     print(f"\n=== Baseline: C-PAC preprocessed ABIDE I (N={len(timeseries)}) ===", flush=True)
     print(f"  ASD: {(labels == 1).sum()}, TC: {(labels == 0).sum()}", flush=True)
     print(f"  Sites: {len(np.unique(sites))}", flush=True)
 
-    cls_dir = derivatives_connectivity(root, variant="cpac") / "classification"
+    cls_dir = conn_dir / "classification"
     cls_dir.mkdir(parents=True, exist_ok=True)
 
     for clf_name in ("ridge", "svc"):

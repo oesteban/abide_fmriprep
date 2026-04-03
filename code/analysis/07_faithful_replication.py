@@ -58,8 +58,12 @@ from _helpers import (
 # --------------------------------------------------------------------------- #
 
 
-def load_cpac_data(data_dir: str | None = None):
-    """Fetch C-PAC ABIDE I data, extract MSDL time series, return all metadata."""
+def load_cpac_data(data_dir: str | None = None, conn_dir: Path | None = None):
+    """Fetch C-PAC ABIDE I data, load or extract MSDL time series.
+
+    If parquets exist in conn_dir (written by 06_baseline_cpac.py), load them.
+    Otherwise extract from PCP and write parquets.
+    """
     print("Fetching ABIDE PCP (C-PAC, func_preproc)...", flush=True)
     abide = fetch_abide_pcp(
         data_dir=data_dir,
@@ -75,6 +79,7 @@ def load_cpac_data(data_dir: str | None = None):
     print(f"  Total subjects: {len(func_files)}", flush=True)
 
     atlas = fetch_atlas_msdl()
+    region_labels = list(atlas.labels)
     masker = NiftiMapsMasker(
         maps_img=atlas.maps,
         standardize="zscore_sample",
@@ -90,39 +95,56 @@ def load_cpac_data(data_dir: str | None = None):
     ages = []
     sexes = []
     skipped = 0
+    loaded_from_cache = 0
 
-    print(f"  Extracting time series from {len(func_files)} subjects...", flush=True)
+    print(f"  Loading/extracting time series for {len(func_files)} subjects...", flush=True)
     for i, func in enumerate(func_files):
         dx = int(phenotypic["DX_GROUP"].iloc[i])
         site = str(phenotypic["SITE_ID"].iloc[i])
         sub_id = int(phenotypic["SUB_ID"].iloc[i])
         age = float(phenotypic["AGE_AT_SCAN"].iloc[i])
-        sex = int(phenotypic["SEX"].iloc[i])  # 1=M, 2=F
+        sex = int(phenotypic["SEX"].iloc[i])
 
         if dx not in (1, 2):
             skipped += 1
             continue
 
-        try:
-            ts = masker.fit_transform(func)
-            if ts.shape[1] != N_MSDL_REGIONS:
+        # Try loading from connectivity-cpac parquets first
+        sub_label = f"sub-{str(sub_id).zfill(7)}"
+        ts = None
+        if conn_dir is not None:
+            parquet_dir = conn_dir / sub_label / "ses-1" / "func"
+            parquets = list(parquet_dir.glob("*_timeseries.parquet")) if parquet_dir.is_dir() else []
+            if parquets:
+                ts = pd.read_parquet(parquets[0]).values
+                loaded_from_cache += 1
+
+        if ts is None:
+            try:
+                ts = masker.fit_transform(func)
+            except Exception as e:
+                print(f"  WARNING: subject {sub_id} failed: {e}", flush=True)
                 skipped += 1
                 continue
-            timeseries_list.append(ts)
-            labels.append(1 if dx == 1 else 0)
-            sites.append(site)
-            subject_ids.append(sub_id)
-            ages.append(age)
-            sexes.append(sex)
-        except Exception as e:
-            print(f"  WARNING: subject {sub_id} failed: {e}", flush=True)
+
+        if ts.shape[1] != N_MSDL_REGIONS:
             skipped += 1
+            continue
+
+        timeseries_list.append(ts)
+        labels.append(1 if dx == 1 else 0)
+        sites.append(site)
+        subject_ids.append(sub_id)
+        ages.append(age)
+        sexes.append(sex)
 
         if (i + 1) % 50 == 0:
             print(f"  Processed {i + 1}/{len(func_files)} "
-                  f"(extracted: {len(timeseries_list)}, skipped: {skipped})", flush=True)
+                  f"(loaded: {loaded_from_cache}, extracted: {len(timeseries_list) - loaded_from_cache}, "
+                  f"skipped: {skipped})", flush=True)
 
-    print(f"  Extracted: {len(timeseries_list)}, skipped: {skipped}", flush=True)
+    print(f"  Total: {len(timeseries_list)} (cached: {loaded_from_cache}, "
+          f"extracted: {len(timeseries_list) - loaded_from_cache}, skipped: {skipped})", flush=True)
     return {
         "timeseries": timeseries_list,
         "labels": np.array(labels),
@@ -290,8 +312,9 @@ def main():
     root = args.project_root.resolve()
     data_dir = args.data_dir
 
-    # Load data
-    data = load_cpac_data(data_dir)
+    # Load data (reuse parquets from connectivity-cpac if 06 already ran)
+    conn_dir = derivatives_connectivity(root, variant="cpac")
+    data = load_cpac_data(data_dir, conn_dir=conn_dir)
     print(f"\n=== Faithful Replication: C-PAC ABIDE I (N={len(data['timeseries'])}) ===",
           flush=True)
     print(f"  ASD: {(data['labels'] == 1).sum()}, TC: {(data['labels'] == 0).sum()}",
