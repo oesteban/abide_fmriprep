@@ -198,17 +198,17 @@
 	datalad-id = 472af0da-cba0-4023-83cc-3f291b92db37
 [submodule "derivatives/connectivity-v1"]
 	path = derivatives/connectivity-v1
-	url = https://github.com/abide-fmriprep/connectivity-v1.git
+	url = git@github.com:abide-fmriprep/connectivity-v1.git
 	datalad-id = 0359072a-700c-49c4-a13d-2523f8be7d9e
 [submodule "derivatives/connectivity-v2"]
 	path = derivatives/connectivity-v2
-	url = https://github.com/abide-fmriprep/connectivity-v2.git
+	url = git@github.com:abide-fmriprep/connectivity-v2.git
 	datalad-id = 3a2f1692-0298-4874-8334-5cdd2165ae47
 [submodule "derivatives/connectivity-v3"]
 	path = derivatives/connectivity-v3
-	url = https://github.com/abide-fmriprep/connectivity-v3.git
+	url = git@github.com:abide-fmriprep/connectivity-v3.git
 	datalad-id = c9833117-d981-4e2d-9f2c-f224d66b7a8b
 [submodule "derivatives/connectivity-cpac"]
 	path = derivatives/connectivity-cpac
-	url = https://github.com/abide-fmriprep/connectivity-cpac.git
+	url = git@github.com:abide-fmriprep/connectivity-cpac.git
 	datalad-id = 525dbf28-cecd-4391-91b4-820473acd391
