@@ -1,0 +1,8 @@
+name: datalad
+channels:
+  - conda-forge
+dependencies:
+  - python >=3.11
+  - datalad >=1.1
+  - datalad-container >=1.2
+  - git-annex

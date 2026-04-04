@@ -24,7 +24,8 @@ abide_preproc/                     # YODA superdataset root
 │   ├── create_site_datasets.sh    # Initialize per-site DataLad derivative datasets
 │   ├── reconcile_subdatasets.sh   # Post-batch: octopus-merge job branches per site
 │   ├── drop_verified.sh           # Audit annex content on remote, drop verified locals
-│   ├── analysis_env.sh            # Curnagl env paths for analysis pipeline
+│   ├── cluster_config.sh          # Central cluster detection and environment paths
+│   ├── analysis_env.sh            # Sources cluster_config.sh for analysis scripts
 │   ├── analysis_orchestrate.sh    # Site-by-site extraction driver (stage/submit/drop)
 │   ├── analysis_extract.sbatch    # SLURM array: per-subject time-series extraction
 │   ├── analysis_prescreen.sbatch  # SLURM: QC pre-screening
@@ -69,6 +70,7 @@ abide_preproc/                     # YODA superdataset root
 │   ├── reprocess_4.txt            # Subjects needing reprocessing
 │   └── ...                        # Various filtered lists
 ├── docs/
+│   ├── WORKFLOW.md                # End-to-end reproducibility guide (start here)
 │   ├── HANDOVER.md                # Operational pitfalls & replication playbook
 │   ├── ANALYSIS.md                # Analysis pipeline documentation
 │   ├── COMPUTE_BUDGET.md          # HPC resource estimates
@@ -228,6 +230,28 @@ Container env vars set inside: `TEMPLATEFLOW_HOME=/templateflow`, `TEMPLATEFLOW_
 ## fMRIPrep standard parameters
 
 Output spaces: `MNI152NLin2009cAsym`, `fsLR` (with `--cifti-output 91k`). BIDS validation is skipped (`--skip-bids-validation`).
+
+### Full fMRIPrep invocation
+
+The exact parameters passed to `datalad containers-run` (see `code/fmriprep-jobarray.sbatch`):
+
+| Parameter | Value | Rationale |
+|-----------|-------|-----------|
+| `--participant-label` | `$SUBJECT` | Per-job: one subject per SLURM task |
+| `--skip-bids-validation` | (flag) | ABIDE BIDS has known validation quirks; validation checked separately |
+| `--output-layout` | `bids` | Standard BIDS derivatives layout |
+| `--fs-license-file` | `/fs/license.txt` | Container bind-mount path; host path via `$FS_LICENSE_FILE` |
+| `--cifti-output` | `91k` | Dense surface+volume for connectivity analyses |
+| `--output-spaces` | `MNI152NLin2009cAsym` | Standard volumetric space (fsLR added implicitly by `--cifti-output`) |
+| `--bids-database-dir` | `/bids/abide-both/.bids-layout-db` | Pre-indexed PyBIDS layout for faster startup |
+| `--nthreads` | 16 | Matches SLURM `--cpus-per-task` |
+| `--omp-nthreads` | 16 | Matches SLURM `--cpus-per-task` |
+| `--mem-mb` | 64000 | Matches SLURM `--mem=64G` |
+| `-w` | `/work` | Container workdir; host path via `$FMRIPREP_WORKDIR` |
+
+Optional flags (conditional):
+- `--anat-only`: Set via `--anat-only` sbatch flag (skip functional processing)
+- `--ignore slicetiming`: Set via `--ignore-stc` sbatch flag (skip STC for sites without timing info)
 
 ### Required TemplateFlow assets
 

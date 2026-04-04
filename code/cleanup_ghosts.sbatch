@@ -27,12 +27,7 @@ set -euo pipefail
 # -------------------------
 # Early environment setup
 # -------------------------
-_early_cluster="${SLURM_CLUSTER_NAME:-unknown}"
-case "$_early_cluster" in
-  curnagl)
-    export PATH="/work/FAC/FBM/DNF/oesteban/hcph/opt/mamba/envs/fmriprep/bin:$PATH"
-    ;;
-esac
+source "$(dirname "$0")/cluster_config.sh"
 
 # -------------------------
 # Helpers

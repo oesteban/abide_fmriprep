@@ -15,6 +15,62 @@ cross-validation.
 Three extraction variants and multiple classification configurations were
 tested to understand how preprocessing and analysis choices affect accuracy.
 
+## 2. Methods
+
+### 2.0.1 QC Criteria
+
+Constants defined in `code/analysis/_helpers.py`:
+
+| Threshold | Value | Rationale |
+|-----------|-------|-----------|
+| Maximum mean FD | 0.5 mm | Per Abraham et al. (2017) |
+| Minimum usable volumes | 120 | After excluding FD > 0.5 mm frames |
+| Minimum atlas coverage | 80% | Fraction of MSDL regions with non-zero signal |
+
+### 2.0.2 Run Selection
+
+When a subject has multiple BOLD runs, the run with the lowest mean FD is selected (from `qc_prescreen.tsv` produced by step 01).
+
+### 2.0.3 Execution Order
+
+```
+01_prescreen_qc.py        →  qc_prescreen.tsv
+02_extract_timeseries.py   →  per-subject parquets, JSONs, HDF5 (via orchestrate.sh)
+03_build_connectomes.py    →  group tangent features (NPZ)
+04_classify.py             →  classification results (JSON)
+05_visualize.py            →  figures
+```
+
+Steps 01-05 form a sequential dependency chain. Steps 06-09 are independent baseline and replication scripts that can run in any order after step 01.
+
+### 2.0.4 Output Schema (BEP017-style)
+
+```
+derivatives/connectivity-{variant}/
+├── dataset_description.json
+├── qc_prescreen.tsv                           # Per-run QC (mean FD, usable vols)
+├── sub-{id}/ses-1/func/
+│   ├── {stem}_stat-mean_timeseries.parquet    # ROI × time matrix (39 regions)
+│   ├── {stem}_stat-mean_timeseries.json       # Sidecar: TR, atlas, confounds, coverage
+│   ├── {stem}_stat-coverage_bold.tsv          # Per-region signal coverage fractions
+│   └── {stem}_stat-pearsoncorrelation_relmat.h5  # 39×39 correlation matrix
+├── group/
+│   ├── group_atlas-MSDL_stat-tangent_relmat.npz  # Tangent-embedded group features
+│   └── group_atlas-MSDL_stat-tangent_relmat.json  # Metadata (subjects, labels, N)
+└── classification/
+    └── results_*.json                         # CV accuracy, per-fold scores
+```
+
+### 2.0.5 External Data Dependencies
+
+Scripts 06-09 download data at runtime (cached in `$NILEARN_DATA`):
+
+| Resource | URL / Source | Used by |
+|----------|-------------|---------|
+| C-PAC preprocessed ABIDE I | `nilearn.datasets.fetch_abide_pcp()` | 06, 07 |
+| Abraham CV splits | `https://team.inria.fr/parietal/files/2016/04/cv_abide.zip` | 07, 08, 09 |
+| MSDL atlas | `nilearn.datasets.fetch_atlas_msdl()` | 02, 03 |
+
 ## 2. Time Series Extraction Variants
 
 All variants use the MSDL atlas (39 probabilistic regions) and produce
