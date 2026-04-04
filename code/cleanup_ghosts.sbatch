@@ -164,10 +164,13 @@ for site in "${!SITE_SUBJECTS[@]}"; do
       datalad push -d "$site_dir" --to gin --data nothing
       success "Pushed $site to GIN"
 
-      # Push to GitHub
+      # Push to GitHub (best-effort — HTTPS origin may lack credentials on compute nodes)
       info "Pushing $site to origin (GitHub)..."
-      datalad push -d "$site_dir" --to origin
-      success "Pushed $site to origin"
+      if datalad push -d "$site_dir" --to origin 2>&1; then
+        success "Pushed $site to origin"
+      else
+        warn "Push to origin failed for $site (HTTPS credentials?). GIN push succeeded — GitHub can be synced later."
+      fi
     fi
   fi
 done
@@ -196,8 +199,11 @@ done
 if [[ "$overlay_changed" -gt 0 ]] && ! git -C "$OVERLAY" diff --cached --quiet 2>/dev/null; then
   git -C "$OVERLAY" commit -m "fix: remove ghost subjects (will be re-registered after reprocessing)"
   info "Pushing overlay to origin..."
-  datalad push -d "$OVERLAY" --to origin
-  success "Overlay cleaned and pushed"
+  if datalad push -d "$OVERLAY" --to origin 2>&1; then
+    success "Overlay cleaned and pushed"
+  else
+    warn "Push overlay to origin failed (HTTPS credentials?). Overlay commit saved locally."
+  fi
 else
   info "No ghost entries found in overlay — skipping"
 fi
