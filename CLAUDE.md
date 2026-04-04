@@ -18,20 +18,37 @@ abide_preproc/                     # YODA superdataset root
 │   ├── abide-both/                # Submodule → oesteban/abide-merged (merged BIDS view)
 │   └── templateflow/              # Submodule → templateflow/templateflow
 ├── code/                          # All scripts (run from repo root with relative paths)
-│   ├── build_abide_both.py        # Main build script (stdlib-only Python)
+│   ├── build_abide_both.py        # Build merged BIDS input (stdlib-only Python)
+│   ├── build_derivatives_overlay.py # Build flat overlay from 43 site datasets
 │   ├── fmriprep-jobarray.sbatch   # SLURM array job (site-level, job branch workflow)
 │   ├── create_site_datasets.sh    # Initialize per-site DataLad derivative datasets
-│   ├── reconcile_subdatasets.sh   # Post-batch: octopus-merge job branches per site (TODO)
-│   ├── migrate_to_subdatasets.py  # One-time migration from monolithic derivatives (TODO)
+│   ├── reconcile_subdatasets.sh   # Post-batch: octopus-merge job branches per site
+│   ├── drop_verified.sh           # Audit annex content on remote, drop verified locals
+│   ├── analysis_env.sh            # Curnagl env paths for analysis pipeline
+│   ├── analysis_orchestrate.sh    # Site-by-site extraction driver (stage/submit/drop)
+│   ├── analysis_extract.sbatch    # SLURM array: per-subject time-series extraction
+│   ├── analysis_prescreen.sbatch  # SLURM: QC pre-screening
+│   ├── analysis_classify.sbatch   # SLURM: classification
+│   ├── analysis_timeseries.sbatch # SLURM: time-series extraction wrapper
+│   ├── analysis_baseline_cpac.sbatch # SLURM: C-PAC baseline analysis
+│   ├── analysis/                  # Analysis pipeline Python scripts
+│   │   ├── _helpers.py            # Shared utilities
+│   │   ├── 01_prescreen_qc.py    # QC pre-screening (mean FD, usable volumes)
+│   │   ├── 02_extract_timeseries.py # Time-series extraction (MSDL atlas)
+│   │   ├── 03_build_connectomes.py  # Connectivity matrix construction
+│   │   ├── 04_classify.py        # Classification (tangent embedding + CV)
+│   │   ├── 05_visualize.py       # Results visualization
+│   │   ├── 06_baseline_cpac.py   # C-PAC pipeline baseline comparison
+│   │   ├── 07_faithful_replication.py # Abraham et al. 2017 replication
+│   │   ├── 08_fmriprep_variant_e.py  # fMRIPrep variant E analysis
+│   │   └── 09_exact_abraham_sample.py # Exact sample match analysis
+│   ├── migrate_to_subdatasets.py  # One-time migration from monolithic derivatives
 │   ├── merge_job_branches.sh      # DEPRECATED
 │   ├── one-test-subject.sh        # Local Docker smoke test [run/first-local branch only]
 │   ├── calypso/                   # HPC utilities [run/first-local branch only]
-│   │   ├── README.md              # Calypso first-run checklist
-│   │   ├── first_subject.sbatch   # Single-subject SLURM job
-│   │   └── preflight.sh           # Environment validation
 │   └── datalad/
 │       └── cfg_fmriprep.py        # DataLad procedure: .gitattributes for derivatives
-├── derivatives/                   # Site-level DataLad subdatasets (43 total)
+├── derivatives/                   # DataLad subdatasets for outputs
 │   ├── v1s0/                      # ABIDE I, site 0 (CMU_a) — fMRIPrep output root
 │   │   ├── dataset_description.json
 │   │   ├── .bidsignore
@@ -40,11 +57,22 @@ abide_preproc/                     # YODA superdataset root
 │   │   └── sourcedata/freesurfer/ # FreeSurfer outputs (regular directories)
 │   │       ├── fsaverage/         # Shared (not versioned per-job)
 │   │       └── sub-v1s0x0050642_ses-1/
-│   ├── v1s1/                      # ABIDE I, site 1
-│   ├── v2s0/                      # ABIDE II, site 0
-│   ├── ...                        # (43 site datasets total)
-│   └── fmriprep-25.2/             # LEGACY: monolithic derivatives (read-only archive)
+│   ├── v1s1/ ... v2s18/           # (43 site datasets total)
+│   ├── fmriprep-25.2/             # Flat overlay: single view of all subjects (consumption)
+│   ├── connectivity-v1/           # Analysis: extraction variant v1
+│   ├── connectivity-v2/           # Analysis: extraction variant v2
+│   ├── connectivity-v3/           # Analysis: extraction variant v3
+│   ├── connectivity-cpac/         # Analysis: C-PAC baseline
+│   └── connectivity-fmriprep-baseline/ # Analysis: fMRIPrep baseline
+├── lists/                         # Subject lists for SLURM submission
+│   ├── curnagl-20260307.txt       # Full ABIDE run list
+│   ├── reprocess_4.txt            # Subjects needing reprocessing
+│   └── ...                        # Various filtered lists
 ├── docs/
+│   ├── HANDOVER.md                # Operational pitfalls & replication playbook
+│   ├── ANALYSIS.md                # Analysis pipeline documentation
+│   ├── COMPUTE_BUDGET.md          # HPC resource estimates
+│   ├── fmriprep-outputs.md        # fMRIPrep output inventory
 │   └── paper/                     # Submodule → oesteban/abide-paper (LaTeX manuscript)
 ├── env/
 │   ├── environment.yml            # micromamba env spec (datalad env)
@@ -59,6 +87,8 @@ abide_preproc/                     # YODA superdataset root
 ```
 
 **Important:** `code/one-test-subject.sh` and `code/calypso/` exist only on the `run/first-local` branch, not on `master`.
+
+**Curnagl HPC path:** `/scratch/oesteban/abide_preproc` (not `abide_fmriprep`).
 
 ## Subject ID scheme
 
@@ -82,8 +112,13 @@ The superdataset has the following fixed submodules plus 43 site-level derivativ
 | `inputs/abide2` | `datasets.datalad.org/abide2/RawData` | ABIDE II raw BIDS |
 | `inputs/abide-both` | `github.com/oesteban/abide-merged` | Merged self-contained BIDS view |
 | `inputs/templateflow` | `github.com/templateflow/templateflow` | Brain templates |
-| `derivatives/fmriprep-25.2` | `github.com/oesteban/abide-fmriprep-derivatives` | Legacy monolithic derivatives |
-| `derivatives/v1s0` | `gin.g-node.org:/abide-fmriprep/v1s0` | Site derivatives (×43) |
+| `derivatives/fmriprep-25.2` | `github.com/abide-fmriprep/fmriprep-25.2` | Flat overlay: unified view of all subjects |
+| `derivatives/v1s0` | `github.com/abide-fmriprep/v1s0` | Site derivatives (×43) |
+| `derivatives/connectivity-v1` | `github.com/abide-fmriprep/connectivity-v1` | Connectivity: variant v1 |
+| `derivatives/connectivity-v2` | `github.com/abide-fmriprep/connectivity-v2` | Connectivity: variant v2 |
+| `derivatives/connectivity-v3` | `github.com/abide-fmriprep/connectivity-v3` | Connectivity: variant v3 |
+| `derivatives/connectivity-cpac` | `github.com/abide-fmriprep/connectivity-cpac` | Connectivity: C-PAC baseline |
+| `derivatives/connectivity-fmriprep-baseline` | `github.com/abide-fmriprep/connectivity-fmriprep-baseline` | Connectivity: fMRIPrep baseline |
 | `docs/paper` | `github.com/oesteban/abide-paper` | LaTeX manuscript |
 | `logs` | `github.com/oesteban/abide-fmriprep-derivatives-logs` | SLURM logs |
 
@@ -129,12 +164,35 @@ sbatch --array=1-N code/fmriprep-jobarray.sbatch \
   --container-name fmriprep-apptainer
 ```
 
-**SLURM with site/dataset filtering:**
+**SLURM with subjects file:**
 ```bash
 sbatch --array=1-N code/fmriprep-jobarray.sbatch \
-  --project-root /path/to/abide_fmriprep \
+  --project-root /path/to/abide_preproc \
   --container-name fmriprep-apptainer \
-  --dataset abide1 --site NYU
+  --subjects-file lists/curnagl-20260307.txt \
+  --fs-license-file /path/to/freesurfer/license.txt
+```
+
+**Reconcile job branches after a batch (via SLURM):**
+```bash
+bash code/reconcile_subdatasets.sh -C . --push
+```
+
+**Audit annex content on remote (verify no ghost subjects):**
+```bash
+code/drop_verified.sh -C derivatives/<site> --remote gin
+```
+
+**Analysis pipeline (pre-screen → extract → classify):**
+```bash
+# Pre-screen QC
+sbatch code/analysis_prescreen.sbatch -C /path/to/abide_preproc --variant v1
+
+# Orchestrated extraction (stages data site-by-site)
+bash code/analysis_orchestrate.sh -C /path/to/abide_preproc --variant v1
+
+# Classification
+sbatch code/analysis_classify.sbatch -C /path/to/abide_preproc --variant v1
 ```
 
 **Paper build (from docs/paper/):**
@@ -191,11 +249,19 @@ datalad get -r tpl-MNI152NLin2009cAsym tpl-MNI152NLin6Asym tpl-OASIS30ANTs tpl-f
 
 **Note:** With `TEMPLATEFLOW_USE_DATALAD=on` (the Docker configuration), fMRIPrep auto-downloads missing templates at runtime and pre-fetching is not strictly required.
 
-## Derivatives architecture (site-level datasets)
+## Derivatives architecture (two-tier: ingestion → consumption)
 
-### Layout
+fMRIPrep derivatives follow a two-tier DataLad architecture:
 
-Each of the 43 site prefixes gets its own DataLad subdataset under `derivatives/`. Each site dataset is a valid fMRIPrep BIDS derivatives root. No per-subject subdatasets — subjects are regular directories inside the site dataset.
+1. **Ingestion tier — 43 site-level datasets** (`derivatives/v1s0/` … `derivatives/v2s18/`):
+   SLURM jobs push results into per-site repos on GIN. Each site dataset is a valid fMRIPrep BIDS derivatives root.
+
+2. **Consumption tier — flat overlay** (`derivatives/fmriprep-25.2/`):
+   A single DataLad dataset that provides a unified flat view of **all** subjects across all 43 sites. Built by `code/build_derivatives_overlay.py`, which registers git-annex keys from the site datasets and configures auto-enabled GIN special remotes. Consumers `datalad clone` from GitHub and `datalad get` fetches content from GIN transparently.
+
+**`derivatives/fmriprep-25.2/` is the default way to access derivatives.** Site-level datasets are the ingestion mechanism — they receive fMRIPrep outputs from HPC jobs and get pushed to GIN/GitHub. For consumption (analysis, QC, sharing), always use the overlay.
+
+### Site-level datasets (ingestion)
 
 - **Site datasets:** `derivatives/v1s0/`, `derivatives/v1s1/`, ..., `derivatives/v2s18/`
 - **GIN repos:** `gin.g-node.org:/abide-fmriprep/v1s0`, etc. (one per site)
@@ -204,7 +270,15 @@ Each of the 43 site prefixes gets its own DataLad subdataset under `derivatives/
 - **HTML reports:** `derivatives/v1s0/sub-v1s0x0050642.html`
 - **`.gitattributes`:** Applied via `cfg_fmriprep` procedure during site dataset creation
 - **`.bidsignore`:** Excludes `*.html`, `logs/`, `figures/`, `*_xfm.*`, surfaces, and other non-BIDS files
-- **Legacy:** `derivatives/fmriprep-25.2/` is the old monolithic dataset (kept as archive)
+
+### Flat overlay (consumption)
+
+- **Path:** `derivatives/fmriprep-25.2/`
+- **GitHub:** `github.com/abide-fmriprep/fmriprep-25.2` (git metadata + small files)
+- **GIN:** Annex content fetched from the 43 site repos via auto-enabled special remotes
+- **Build script:** `code/build_derivatives_overlay.py` — registers annex keys from site datasets, configures GIN remotes with correct UUIDs
+- **Usage:** `datalad clone` from GitHub, then `datalad get sub-v1s0x0050642/` fetches from GIN
+- **Content:** All fMRIPrep outputs except `sourcedata/freesurfer/` (excluded from overlay)
 
 ### SLURM job workflow (job branches)
 
@@ -216,7 +290,10 @@ Each SLURM job processes one subject and pushes results to the subject's site da
 4. **Branch:** `git checkout -b job/sub-v1s0x0050642` in the site subdataset
 5. **Run:** `datalad containers-run --explicit` with per-subject `--output` declarations (shared files like `dataset_description.json`, `CITATION.*`, `fsaverage/` are excluded to prevent merge conflicts)
 6. **Push:** Job branch + annex content pushed to the site's GIN repo (exponential backoff, rescue-to-`$SCRATCH` on failure)
-7. **Reconcile:** After a batch, octopus-merge all job branches per site (guaranteed conflict-free since outputs are disjoint directories)
+7. **Reconcile:** After a batch, octopus-merge all job branches per site (`code/reconcile_subdatasets.sh -C . --push`)
+8. **Audit:** Verify annex content reached GIN (`code/drop_verified.sh`). See "Known gotcha: ghost subjects" below.
+
+**Known gotcha: ghost subjects.** If the push in step 6 fails and the rescue also fails, the git commit (metadata) may reach master via reconciliation but the annex content is lost (it only existed on the ephemeral compute-node tmpdir). The skip check in step 3 uses `git ls-tree master` which sees the directory but doesn't verify annex availability — so the subject appears "done" but is actually unrecoverable. Fix by removing the ghost from master and reprocessing. See [docs/HANDOVER.md](docs/HANDOVER.md) §1.1 for detection and prevention.
 
 ### Why site-level (not per-subject subdatasets)?
 
@@ -226,9 +303,9 @@ Each SLURM job processes one subject and pushes results to the subject's site da
 - **Simpler reconciliation:** fetch + octopus merge (vs discover + install subdatasets)
 - **Largest site:** v2s6 (KKI_1, 211 subjects, ~95K files) — well within git-annex comfort
 
-### GIN organization: `abide-fmriprep`
+### GIN/GitHub organization: `abide-fmriprep`
 
-One repo per site: `abide-fmriprep/v1s0`, `abide-fmriprep/v1s1`, ..., `abide-fmriprep/v2s18`.
+One repo per site plus the overlay: `abide-fmriprep/v1s0`, ..., `abide-fmriprep/v2s18`, `abide-fmriprep/fmriprep-25.2`.
 
 ### Known gotcha: GIN annex UUID mismatch
 
@@ -260,7 +337,7 @@ git -C derivatives/<site> config remote.gin.annex-uuid "$gin_uuid"
 
 ## Environment setup
 
-**micromamba environment** (`env/environment.yml`):
+**micromamba environment — `datalad`** (`env/environment.yml`):
 - Python >=3.11
 - datalad >=1.1
 - datalad-container >=1.2
@@ -271,6 +348,12 @@ git -C derivatives/<site> config remote.gin.annex-uuid "$gin_uuid"
 micromamba create -f env/environment.yml
 micromamba activate datalad
 ```
+
+**micromamba environment — `abide-analysis`** (Curnagl only):
+- Separate env for the analysis pipeline (`code/analysis/`)
+- Includes nilearn, scikit-learn, pandas, matplotlib
+- Path on Curnagl: `/work/FAC/FBM/DNF/oesteban/hcph/opt/mamba/envs/abide-analysis/`
+- Sourced via `code/analysis_env.sh`
 
 ## SLURM resource defaults
 
@@ -291,3 +374,26 @@ micromamba activate datalad
 ## cfg_fmriprep.py DataLad procedure
 
 The `code/datalad/cfg_fmriprep.py` script is a DataLad procedure that configures `.gitattributes` for fMRIPrep derivative datasets. It forces metadata formats (JSON, TSV, FreeSurfer text outputs) into git and imaging formats (`.gii`, `.h5`, `.nii.gz`) into annex. Applied to each site dataset during creation. Install by symlinking into DataLad's procedures directory.
+
+## Analysis pipeline
+
+The analysis pipeline replicates and extends Abraham et al. (2017) functional connectivity classification. Scripts live in `code/analysis/` with SLURM wrappers in `code/analysis_*.sbatch`. Results go into `derivatives/connectivity-*` subdatasets.
+
+**Pipeline stages:**
+1. `01_prescreen_qc.py` — QC pre-screening: mean FD, usable volumes, run selection
+2. `02_extract_timeseries.py` — Per-subject ROI time-series extraction (MSDL atlas, 3 variants)
+3. `03_build_connectomes.py` — Connectivity matrix construction
+4. `04_classify.py` — Classification with tangent embedding + cross-validation
+5. `05_visualize.py` — Results visualization
+6. `06_baseline_cpac.py` — C-PAC pipeline baseline comparison
+7. `07_faithful_replication.py` — Exact Abraham et al. 2017 replication
+8. `08_fmriprep_variant_e.py` — fMRIPrep variant E analysis
+9. `09_exact_abraham_sample.py` — Exact original sample match
+
+**Extraction variants:** `v1` (single-stage regression), `v2`, `v3` — each produces a separate connectivity derivative dataset.
+
+See [docs/ANALYSIS.md](docs/ANALYSIS.md) for full documentation.
+
+## Operational pitfalls
+
+See [docs/HANDOVER.md](docs/HANDOVER.md) for a comprehensive catalog of pitfalls encountered during production runs and a step-by-step replication playbook. Key issues include ghost subjects (annex content lost), missing GIN remotes in cloned subdatasets, UUID mismatches, login node restrictions, and SLURM accounting quirks.
