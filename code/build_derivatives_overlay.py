@@ -23,12 +23,17 @@ from typing import Dict, List, Optional, Tuple
 # Helpers
 # ---------------------------------------------------------------------------
 
-MICROMAMBA_ENV = "datalad"
+MICROMAMBA_ENV = os.environ.get("DATALAD_MAMBA_ENV", "datalad")
 _ENV_PREFIX = ["micromamba", "run", "-n", MICROMAMBA_ENV]
 
 
 def _wrap(cmd: List[str]) -> List[str]:
-    """Prepend the micromamba environment wrapper to a command."""
+    """Prepend the micromamba environment wrapper to a command.
+
+    The environment name defaults to ``datalad`` but can be overridden by
+    setting the ``DATALAD_MAMBA_ENV`` environment variable (e.g., to
+    ``fmriprep`` on Curnagl where datalad lives in the fmriprep env).
+    """
     return _ENV_PREFIX + cmd
 
 
